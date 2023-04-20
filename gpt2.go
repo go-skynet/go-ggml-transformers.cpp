@@ -12,11 +12,11 @@ import (
 	"unsafe"
 )
 
-type gpt2 struct {
+type GPT2 struct {
 	state unsafe.Pointer
 }
 
-func New(model string) (*gpt2, error) {
+func New(model string) (*GPT2, error) {
 	state := C.gpt2_allocate_state()
 	modelPath := C.CString(model)
 	result := C.gpt2_bootstrap(modelPath, state)
@@ -24,10 +24,10 @@ func New(model string) (*gpt2, error) {
 		return nil, fmt.Errorf("failed loading model")
 	}
 
-	return &gpt2{state: state}, nil
+	return &GPT2{state: state}, nil
 }
 
-func (l *gpt2) Predict(text string, opts ...PredictOption) (string, error) {
+func (l *GPT2) Predict(text string, opts ...PredictOption) (string, error) {
 
 	po := NewPredictOptions(opts...)
 
@@ -54,6 +54,6 @@ func (l *gpt2) Predict(text string, opts ...PredictOption) (string, error) {
 	return res, nil
 }
 
-func (l *gpt2) Free() {
+func (l *GPT2) Free() {
 	C.gpt2_free_model(l.state)
 }
