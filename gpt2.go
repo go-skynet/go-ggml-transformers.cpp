@@ -16,10 +16,10 @@ type gpt2 struct {
 	state unsafe.Pointer
 }
 
-func New(model string, context_size int) (*gpt2, error) {
+func New(model string) (*gpt2, error) {
 	state := C.gpt2_allocate_state()
 	modelPath := C.CString(model)
-	result := C.gpt2_bootstrap(modelPath, state, C.int(context_size))
+	result := C.gpt2_bootstrap(modelPath, state)
 	if result != 0 {
 		return nil, fmt.Errorf("failed loading model")
 	}

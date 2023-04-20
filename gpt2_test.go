@@ -1,7 +1,7 @@
 package gpt2_test
 
 import (
-	. "github.com/go-skynet/go-gpt4all-j.cpp"
+	. "github.com/go-skynet/go-gpt2.cpp"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
@@ -9,7 +9,7 @@ import (
 var _ = Describe("gpt2 binding", func() {
 	Context("Declaration", func() {
 		It("fails with no model", func() {
-			model, err := New("not-existing", 1024)
+			model, err := New("not-existing")
 			Expect(err).To(HaveOccurred())
 			Expect(model).To(BeNil())
 		})

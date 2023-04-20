@@ -6,7 +6,7 @@ extern "C" {
 
 void *gpt2_allocate_state();
 
-int gpt2_bootstrap(const char *model_path, void *state_pr, int ctx_size);
+int gpt2_bootstrap(const char *model_path, void *state_pr);
 
 void* gpt2_allocate_params(const char *prompt, int seed, int threads, int tokens,
                             int top_k, float top_p, float temp, int n_batch);

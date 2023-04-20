@@ -79,7 +79,7 @@ struct gpt2_state {
 };
 
 // load the model's weights from a file
-bool gpt2_model_load(const std::string & fname, gpt2_model & model, gpt_vocab & vocab, int n_ctx) {
+bool gpt2_model_load(const std::string & fname, gpt2_model & model, gpt_vocab & vocab) {
     printf("%s: loading model from '%s'\n", __func__, fname.c_str());
 
     auto fin = std::ifstream(fname, std::ios::binary);
@@ -829,14 +829,14 @@ int gpt2_predict(void* params_ptr, void* state_pr, char* result) {
     return 0;
 }
 
-int gpt2_bootstrap(const char *model_path, void* state_pr, int n_ctx)
+int gpt2_bootstrap(const char *model_path, void* state_pr)
 // load the model
 {
     ggml_time_init();
     gpt2_state* state = (gpt2_state*) state_pr;
 
     const int64_t t_start_us = ggml_time_us();
-    if (!gpt2_model_load(model_path, state->model, state->vocab, n_ctx)) {
+    if (!gpt2_model_load(model_path, state->model, state->vocab)) {
         fprintf(stderr, "%s: failed to load model from '%s'\n", __func__, model_path);
         return 1;
     }
