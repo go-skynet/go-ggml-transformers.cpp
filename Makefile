@@ -158,14 +158,17 @@ clean:
 gpt2.o: gpt2.cpp ggml.o utils.o
 	$(CXX) $(CXXFLAGS) gpt2.cpp ggml.o utils.o -o gpt2.o -c $(LDFLAGS)
 
-libgpt2.a: gpt2.o ggml.o utils.o
-	ar src libgpt2.a gpt2.o ggml.o utils.o
+stablelm.o: stablelm.cpp
+	$(CXX) $(CXXFLAGS) stablelm.cpp -o stablelm.o -c $(LDFLAGS)
+
+libgpt2.a: stablelm.o gpt2.o ggml.o utils.o
+	ar src libgpt2.a stablelm.o gpt2.o ggml.o utils.o
 
 generic-gpt2.o: gpt2.cpp generic-ggml.o utils.o
 	$(CXX) $(CXXFLAGS) gpt2.cpp ggml.o utils.o -o gpt2.o -c $(LDFLAGS)
 
-generic-libgpt2.a: gpt2.o generic-ggml.o utils.o
-	ar src libgpt2.a gpt2.o ggml.o utils.o
+generic-libgpt2.a: stablelm.o gpt2.o generic-ggml.o utils.o
+	ar src libgpt2.a stablelm.o gpt2.o ggml.o utils.o
 
 example: 
 	@C_INCLUDE_PATH=${INCLUDE_PATH} LIBRARY_PATH=${LIBRARY_PATH} go build -o example -x ./examples
