@@ -146,8 +146,11 @@ ggml.o:
 generic-ggml.o:
 	$(CC) $(CFLAGS) -c ggml.cpp/src/ggml.c -o ggml.o
 
-utils.o:
-	$(CXX) $(CXXFLAGS) -c ggml.cpp/examples/utils.cpp -o utils.o
+common.o:
+	$(CXX) $(CXXFLAGS) -c ggml.cpp/examples/common.cpp -o common.o
+
+common-ggml.o:
+	$(CXX) $(CXXFLAGS) -c ggml.cpp/examples/common-ggml.cpp -o common-ggml.o
 
 clean:
 	rm -f *.o
@@ -155,17 +158,20 @@ clean:
 	rm -rf build
 	rm -rf example
 
-gpt2.o: gpt2.cpp ggml.o utils.o
-	$(CXX) $(CXXFLAGS) gpt2.cpp ggml.o utils.o -o gpt2.o -c $(LDFLAGS)
+gpt2.o: gpt2.cpp ggml.o
+	$(CXX) $(CXXFLAGS) gpt2.cpp ggml.o -o gpt2.o -c $(LDFLAGS)
+
+dolly.o: dolly.cpp
+	$(CXX) $(CXXFLAGS) dolly.cpp -o dolly.o -c $(LDFLAGS)
 
 stablelm.o: stablelm.cpp
 	$(CXX) $(CXXFLAGS) stablelm.cpp -o stablelm.o -c $(LDFLAGS)
 
-libgpt2.a: stablelm.o gpt2.o ggml.o utils.o
-	ar src libgpt2.a stablelm.o gpt2.o ggml.o utils.o
+libgpt2.a: stablelm.o gpt2.o ggml.o dolly.o common-ggml.o common.o
+	ar src libgpt2.a stablelm.o gpt2.o dolly.o ggml.o common-ggml.o common.o
 
-generic-gpt2.o: gpt2.cpp generic-ggml.o utils.o
-	$(CXX) $(CXXFLAGS) gpt2.cpp ggml.o utils.o -o gpt2.o -c $(LDFLAGS)
+generic-gpt2.o: gpt2.cpp generic-ggml.o
+	$(CXX) $(CXXFLAGS) gpt2.cpp ggml.o -o gpt2.o -c $(LDFLAGS)
 
 generic-libgpt2.a: stablelm.o gpt2.o generic-ggml.o utils.o
 	ar src libgpt2.a stablelm.o gpt2.o ggml.o utils.o

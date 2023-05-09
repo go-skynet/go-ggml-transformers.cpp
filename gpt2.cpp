@@ -1,6 +1,7 @@
 #include "ggml.h"
 #include "gpt2.h"
-#include "utils.h"
+#include "common.h"
+#include "common-ggml.h"
 
 #include <cassert>
 #include <cmath>
@@ -732,17 +733,7 @@ int gpt2_predict(void* params_ptr, void* state_pr, char* result) {
 
 
     std::mt19937 rng(params.seed);
-    if (params.prompt.empty()) {
-        if( !isatty(STDIN_FILENO) ){
-            std::string line;
-            while( std::getline(std::cin, line) ){
-                params.prompt = params.prompt + "\n" + line;
-            }
-        } else {
-            params.prompt = gpt_random_prompt(rng);
-        }
-    }
-
+ 
     int64_t t_load_us = 0;
 
 

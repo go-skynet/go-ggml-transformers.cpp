@@ -1,7 +1,9 @@
 #include "ggml.h"
-#include "stablelm.h"
+#include "dolly.h"
+
 #include "common.h"
 #include "common-ggml.h"
+
 
 #include <cassert>
 #include <cmath>
@@ -14,18 +16,18 @@
 #include <iostream>
 #include <unistd.h>
 
-// default hparams (StableLM 3B)
-struct stablelm_hparams {
-    int32_t n_vocab = 50257;
-    int32_t n_ctx   = 4096;
-    int32_t n_embd  = 4096;
-    int32_t n_head  = 32;
-    int32_t n_layer = 16;
-    int32_t n_rot   = 32; // rotary_pct * (n_embd / n_head)
-    int32_t ftype   = 1;
+// default hparams (Dolly-V2 3B)
+struct dollyv2_hparams {
+    int32_t n_vocab = 50254; // tokenizer.vocab_size
+    int32_t n_ctx   = 2048;  // model.config.max_position_embeddings
+    int32_t n_embd  = 2560;  // model.config.hidden_size
+    int32_t n_head  = 32;    // model.config.num_attention_heads
+    int32_t n_layer = 32;    // model.config.num_hidden_layers
+    int32_t n_rot   = 20;    // rotary_pct[25%] * (n_embd / n_head)
+    int32_t ftype   = GGML_FTYPE_MOSTLY_F16;
 };
 
-struct stablelm_layer {
+struct dollyv2_layer {
     // pre normalization
     struct ggml_tensor * ln_1_g;
     struct ggml_tensor * ln_1_b;
@@ -49,8 +51,8 @@ struct stablelm_layer {
     struct ggml_tensor * c_mlp_proj_b;
 };
 
-struct stablelm_model {
-    stablelm_hparams hparams;
+struct dollyv2_model {
+    dollyv2_hparams hparams;
 
     // normalization
     struct ggml_tensor * ln_f_g;
@@ -61,7 +63,7 @@ struct stablelm_model {
     struct ggml_tensor * lmh_g; // language model head
     //struct ggml_tensor * lmh_b; // language model bias
 
-    std::vector<stablelm_layer> layers;
+    std::vector<dollyv2_layer> layers;
 
     // key + value memory
     struct ggml_tensor * memory_k;
@@ -72,9 +74,10 @@ struct stablelm_model {
     std::map<std::string, struct ggml_tensor *> tensors;
 };
 
-struct stablelm_state {
+
+struct dolly_state {
     gpt_vocab vocab;
-    stablelm_model model;
+    dollyv2_model model;
     struct {
         int64_t t_load_us = -1;
         int64_t t_sample_us = -1;
@@ -82,8 +85,9 @@ struct stablelm_state {
     } timing;
 };
 
+
 // load the model's weights from a file
-bool stablelm_model_load(const std::string & fname, stablelm_model & model, gpt_vocab & vocab) {
+bool dollyv2_model_load(const std::string & fname, dollyv2_model & model, gpt_vocab & vocab) {
     printf("%s: loading model from '%s' - please wait ...\n", __func__, fname.c_str());
 
     auto fin = std::ifstream(fname, std::ios::binary);
@@ -138,26 +142,20 @@ bool stablelm_model_load(const std::string & fname, stablelm_model & model, gpt_
             vocab.token_to_id[word] = i;
             vocab.id_to_token[i] = word;
         }
+
+        vocab.add_special_token("### End");
+        vocab.add_special_token("### Instruction:");
+        vocab.add_special_token("### Response:");
     }
 
     // for the big tensors, we have the option to store the data in 16-bit floats or quantized
     // in order to save memory and also to speed up the computation
-    ggml_type wtype = GGML_TYPE_COUNT;
-    switch (model.hparams.ftype) {
-        case 0: wtype = GGML_TYPE_F32;  break;
-        case 1: wtype = GGML_TYPE_F16;  break;
-        case 2: wtype = GGML_TYPE_Q4_0; break;
-        case 3: wtype = GGML_TYPE_Q4_1; break;
-        case 5: wtype = GGML_TYPE_Q4_2; break;
-        default:
-                {
-                    fprintf(stderr, "%s: invalid model file '%s' (bad ftype value %d)\n",
-                            __func__, fname.c_str(), model.hparams.ftype);
-                    return false;
-                }
+    ggml_type wtype = ggml_ftype_to_ggml_type((ggml_ftype) (model.hparams.ftype));
+    if (wtype == GGML_TYPE_COUNT) {
+        fprintf(stderr, "%s: invalid model file '%s' (bad ftype value %d)\n",
+                __func__, fname.c_str(), model.hparams.ftype);
+        return false;
     }
-
-    const ggml_type wtype2 = GGML_TYPE_F32;
 
     auto & ctx = model.ctx;
 
@@ -270,6 +268,9 @@ bool stablelm_model_load(const std::string & fname, stablelm_model & model, gpt_
             layer.c_mlp_proj_b    = ggml_new_tensor_1d(ctx, GGML_TYPE_F32,   n_embd);
 
             // map by name
+
+            // unmapped: attention.rotary_emb, mlp.act
+
             model.tensors["gpt_neox.layers." + std::to_string(i) + ".input_layernorm.weight"] = layer.ln_1_g;
             model.tensors["gpt_neox.layers." + std::to_string(i) + ".input_layernorm.bias"]   = layer.ln_1_b;
 
@@ -298,15 +299,15 @@ bool stablelm_model_load(const std::string & fname, stablelm_model & model, gpt_
         const int n_layer = hparams.n_layer;
         const int n_ctx   = hparams.n_ctx;
 
-        const int n_mem      = n_layer*n_ctx;
-        const int n_elements = n_embd*n_mem;
+        const int64_t n_mem      = n_layer*n_ctx;
+        const int64_t n_elements = n_embd*n_mem;
 
         model.memory_k = ggml_new_tensor_1d(ctx, GGML_TYPE_F16, n_elements);
         model.memory_v = ggml_new_tensor_1d(ctx, GGML_TYPE_F16, n_elements);
 
         const size_t memory_size = ggml_nbytes(model.memory_k) + ggml_nbytes(model.memory_v);
 
-        printf("%s: memory_size = %8.2f MB, n_mem = %d\n", __func__, memory_size/1024.0/1024.0, n_mem);
+        printf("%s: memory_size = %8.2f MB, n_mem = %lld\n", __func__, memory_size/1024.0/1024.0, n_mem);
     }
 
     // load weights
@@ -319,11 +320,11 @@ bool stablelm_model_load(const std::string & fname, stablelm_model & model, gpt_
         while (true) {
             int32_t n_dims;
             int32_t length;
-            int32_t ftype;
+            int32_t ttype;
 
             fin.read(reinterpret_cast<char *>(&n_dims), sizeof(n_dims));
             fin.read(reinterpret_cast<char *>(&length), sizeof(length));
-            fin.read(reinterpret_cast<char *>(&ftype),  sizeof(ftype));
+            fin.read(reinterpret_cast<char *>(&ttype),  sizeof(ttype));
 
             if (fin.eof()) {
                 break;
@@ -356,25 +357,12 @@ bool stablelm_model_load(const std::string & fname, stablelm_model & model, gpt_
                 return false;
             }
 
+            // for debugging
             if (0) {
-                static const char * ftype_str[] = { "f32", "f16", "q4_0", "q4_1", "q4_2", };
-                printf("%24s - [%5d, %5d], type = %6s, %6.2f MB, %9zu bytes\n", name.data(), ne[0], ne[1], ftype_str[ftype], ggml_nbytes(tensor)/1024.0/1024.0, ggml_nbytes(tensor));
+                printf("%24s - [%5d, %5d], type = %6s, %6.2f MB, %9zu bytes\n", name.data(), ne[0], ne[1], ggml_type_name(ggml_type(ttype)), ggml_nbytes(tensor)/1024.0/1024.0, ggml_nbytes(tensor));
             }
 
-            size_t bpe = 0;
-
-            switch (ftype) {
-                case 0: bpe = ggml_type_size(GGML_TYPE_F32);  break;
-                case 1: bpe = ggml_type_size(GGML_TYPE_F16);  break;
-                case 2: bpe = ggml_type_size(GGML_TYPE_Q4_0); assert(ne[0] % 64 == 0); break;
-                case 3: bpe = ggml_type_size(GGML_TYPE_Q4_1); assert(ne[0] % 64 == 0); break;
-                case 5: bpe = ggml_type_size(GGML_TYPE_Q4_2); assert(ne[0] % 64 == 0); break;
-                default:
-                        {
-                            fprintf(stderr, "%s: unknown ftype %d in model file\n", __func__, ftype);
-                            return false;
-                        }
-            };
+            const size_t bpe = ggml_type_size(ggml_type(ttype));
 
             if ((nelements*bpe)/ggml_blck_size(tensor->type) != ggml_nbytes(tensor)) {
                 fprintf(stderr, "%s: tensor '%s' has wrong size in model file: got %zu, expected %zu\n",
@@ -384,7 +372,6 @@ bool stablelm_model_load(const std::string & fname, stablelm_model & model, gpt_
 
             fin.read(reinterpret_cast<char *>(tensor->data), ggml_nbytes(tensor));
 
-            //printf("%42s - [%5d, %5d], type = %6s, %6.2f MB\n", name.data(), ne[0], ne[1], ftype == 0 ? "float" : "f16", ggml_nbytes(tensor)/1024.0/1024.0);
             total_size += ggml_nbytes(tensor);
             if (++n_tensors % 8 == 0) {
                 printf(".");
@@ -402,7 +389,6 @@ bool stablelm_model_load(const std::string & fname, stablelm_model & model, gpt_
     return true;
 }
 
-
 // evaluate the transformer
 //
 //   - model:     the model
@@ -411,8 +397,8 @@ bool stablelm_model_load(const std::string & fname, stablelm_model & model, gpt_
 //   - embd_inp:  the embeddings of the tokens in the context
 //   - embd_w:    the predicted logits for the next token
 //
-bool stablelm_eval(
-        const stablelm_model & model,
+bool dollyv2_eval(
+        const dollyv2_model & model,
         const int n_threads,
         const int n_past,
         const std::vector<gpt_vocab::id> & embd_inp,
@@ -452,7 +438,8 @@ bool stablelm_eval(
     };
 
     struct ggml_context * ctx0 = ggml_init(params);
-    struct ggml_cgraph gf = { .n_threads = n_threads };
+    struct ggml_cgraph gf = { };
+    gf.n_threads = n_threads;
 
     struct ggml_tensor * embd = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, N);
     memcpy(embd->data, embd_inp.data(), N*ggml_element_size(embd));
@@ -662,55 +649,52 @@ bool stablelm_eval(
     return true;
 }
 
-
-int stablelm_predict(void* params_ptr, void* state_pr, char* result) {
+int dolly_predict(void* params_ptr, void* state_pr, char* result) {
     gpt_params params = *(gpt_params*) params_ptr;
-    stablelm_state state = *(stablelm_state*) state_pr;
+    dolly_state state = *(dolly_state*) state_pr;
     gpt_vocab vocab = state.vocab;
-    stablelm_model model = state.model;
-
-    const int64_t t_main_start_us = ggml_time_us();
+    dollyv2_model model = state.model;
 
     if (params.seed < 0) {
         params.seed = time(NULL);
     }
 
+    printf("%s: seed = %d\n", __func__, params.seed);
+
     std::mt19937 rng(params.seed);
+  
+    const std::string prompt = params.prompt;
 
     int64_t t_load_us = 0;
-
 
     int n_past = 0;
 
     int64_t t_sample_us  = 0;
     int64_t t_predict_us = 0;
-    std::string res = "";
 
     std::vector<float> logits;
 
     // tokenize the prompt
-    std::vector<gpt_vocab::id> embd_inp = ::gpt_tokenize(vocab, params.prompt);
+    std::vector<gpt_vocab::id> embd_inp = ::gpt_tokenize(vocab, prompt);
 
     params.n_predict = std::min(params.n_predict, model.hparams.n_ctx - (int) embd_inp.size());
 
-    printf("%s: number of tokens in prompt = %zu\n", __func__, embd_inp.size());
-    for (int i = 0; i < embd_inp.size(); i++) {
-        printf("%s: token[%d] = %6d, %s\n", __func__, i, embd_inp[i], vocab.id_to_token.at(embd_inp[i]).c_str());
-    }
-    printf("\n");
 
     std::vector<gpt_vocab::id> embd;
+    std::string res = "";
 
     // determine the required inference memory per token:
     size_t mem_per_token = 0;
-    stablelm_eval(model, params.n_threads, 0, { 0, 1, 2, 3 }, logits, mem_per_token);
+    dollyv2_eval(model, params.n_threads, 0, { 0, 1, 2, 3 }, logits, mem_per_token);
+
+    const int32_t end_token = vocab.token_to_id["### End"];
 
     for (int i = embd.size(); i < embd_inp.size() + params.n_predict; i++) {
         // predict
         if (embd.size() > 0) {
             const int64_t t_start_us = ggml_time_us();
 
-            if (!stablelm_eval(model, params.n_threads, n_past, embd, logits, mem_per_token)) {
+            if (!dollyv2_eval(model, params.n_threads, n_past, embd, logits, mem_per_token)) {
                 printf("Failed to predict\n");
                 return 1;
             }
@@ -741,6 +725,7 @@ int stablelm_predict(void* params_ptr, void* state_pr, char* result) {
 
             // add it to the context
             embd.push_back(id);
+
         } else {
             // if here, it means we are still processing the input prompt
             for (int k = i; k < embd_inp.size(); k++) {
@@ -754,26 +739,45 @@ int stablelm_predict(void* params_ptr, void* state_pr, char* result) {
 
         // display text
         for (auto id : embd) {
-            res += vocab.id_to_token[id].c_str();
+                        res += vocab.id_to_token[id].c_str();
+
         }
 
         // end of text token
-        if (embd.back() == 0) {
+        if (embd.back() == 0 || (end_token > 0 && embd.back() == end_token)) {
             break;
         }
     }
+
+    // report timing
+    /*
+    {
+        const int64_t t_main_end_us = ggml_time_us();
+
+        printf("\n\n");
+        printf("%s: mem per token = %8zu bytes\n", __func__, mem_per_token);
+        printf("%s:     load time = %8.2f ms\n", __func__, t_load_us/1000.0f);
+        printf("%s:   sample time = %8.2f ms\n", __func__, t_sample_us/1000.0f);
+        printf("%s:  predict time = %8.2f ms / %.2f ms per token\n", __func__, t_predict_us/1000.0f, t_predict_us/1000.0f/n_past);
+        printf("%s:    total time = %8.2f ms\n", __func__, (t_main_end_us - t_main_start_us)/1000.0f);
+    }
+    */
+
     strcpy(result, res.c_str()); 
+
     return 0;
 }
 
-int stablelm_bootstrap(const char *model_path, void* state_pr)
+
+
+int dolly_bootstrap(const char *model_path, void* state_pr)
 // load the model
 {
     ggml_time_init();
-    stablelm_state* state = (stablelm_state*) state_pr;
+    dolly_state* state = (dolly_state*) state_pr;
 
     const int64_t t_start_us = ggml_time_us();
-    if (!stablelm_model_load(model_path, state->model, state->vocab)) {
+    if (!dollyv2_model_load(model_path, state->model, state->vocab)) {
         fprintf(stderr, "%s: failed to load model from '%s'\n", __func__, model_path);
         return 1;
     }
@@ -782,21 +786,21 @@ int stablelm_bootstrap(const char *model_path, void* state_pr)
     return 0;
 }
 
-void* stablelm_allocate_state() {
-    return new stablelm_state;
+void* dolly_allocate_state() {
+    return new dolly_state;
 }
 
-void stablelm_free_model(void *state_ptr) {
-    stablelm_state* state = (stablelm_state*) state_ptr;
+void dolly_free_model(void *state_ptr) {
+    dolly_state* state = (dolly_state*) state_ptr;
     ggml_free(state->model.ctx);
 }
 
-void stablelm_free_params(void* params_ptr) {
+void dolly_free_params(void* params_ptr) {
     gpt_params* params = (gpt_params*) params_ptr;
     delete params;
 }
 
-void* stablelm_allocate_params(const char *prompt, int seed, int threads, int tokens, int top_k,
+void* dolly_allocate_params(const char *prompt, int seed, int threads, int tokens, int top_k,
                             float top_p, float temp, int n_batch) {
     gpt_params* params = new gpt_params;
     params->seed = seed;
