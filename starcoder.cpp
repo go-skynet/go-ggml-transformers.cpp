@@ -168,6 +168,10 @@ bool starcoder_model_load(const std::string & fname, starcoder_model & model, gp
         const int n_layer = hparams.n_layer;
         const int n_ctx   = hparams.n_ctx;
         const int n_vocab = hparams.n_vocab;
+        const int head_dim = n_embd / hparams.n_head;
+        const int kv_heads = hparams.n_head; // 1 if MQA else hparams.n_head
+        const int kv_dim   = kv_heads * head_dim;
+
 
         ctx_size += n_embd*ggml_type_sizef(GGML_TYPE_F32); // ln_f_g
         ctx_size += n_embd*ggml_type_sizef(GGML_TYPE_F32); // ln_f_b
@@ -182,8 +186,8 @@ bool starcoder_model_load(const std::string & fname, starcoder_model & model, gp
         ctx_size += n_layer*(n_embd*ggml_type_sizef(GGML_TYPE_F32)); // ln_2_g
         ctx_size += n_layer*(n_embd*ggml_type_sizef(GGML_TYPE_F32)); // ln_2_b
 
-        ctx_size += n_layer*(3*n_embd*n_embd*ggml_type_sizef(wtype));         // c_attn_attn_w
-        ctx_size += n_layer*(       3*n_embd*ggml_type_sizef(GGML_TYPE_F32)); // c_attn_attn_b
+        ctx_size += n_layer*((n_embd + 2*kv_dim)*n_embd*ggml_type_sizef(wtype));         // c_attn_attn_w // TODO:
+        ctx_size += n_layer*(       (n_embd + 2*kv_dim)*ggml_type_sizef(GGML_TYPE_F32)); // c_attn_attn_b
 
         ctx_size += n_layer*(n_embd*n_embd*ggml_type_sizef(wtype));           // c_attn_proj_w
         ctx_size += n_layer*(       n_embd*ggml_type_sizef(GGML_TYPE_F32));   // c_attn_proj_b
