@@ -164,6 +164,12 @@ gpt2.o: gpt2.cpp ggml.o
 dolly.o: dolly.cpp
 	$(CXX) $(CXXFLAGS) dolly.cpp -o dolly.o -c $(LDFLAGS)
 
+replit.o: replit.cpp
+	$(CXX) $(CXXFLAGS) replit.cpp -o replit.o -c $(LDFLAGS)
+
+gptneox.o: gptneox.cpp
+	$(CXX) $(CXXFLAGS) gptneox.cpp -o gptneox.o -c $(LDFLAGS)
+
 redpajama.o: redpajama.cpp
 	$(CXX) $(CXXFLAGS) redpajama.cpp -o redpajama.o -c $(LDFLAGS)
 
@@ -173,8 +179,8 @@ starcoder.o: starcoder.cpp
 stablelm.o: stablelm.cpp
 	$(CXX) $(CXXFLAGS) stablelm.cpp -o stablelm.o -c $(LDFLAGS)
 
-libgpt2.a: stablelm.o redpajama.o starcoder.o gpt2.o ggml.o dolly.o common-ggml.o common.o
-	ar src libgpt2.a stablelm.o redpajama.o starcoder.o gpt2.o dolly.o ggml.o common-ggml.o common.o
+libgpt2.a: stablelm.o redpajama.o starcoder.o gpt2.o replit.o gptneox.o ggml.o dolly.o common-ggml.o common.o
+	ar src libgpt2.a stablelm.o replit.o gptneox.o redpajama.o starcoder.o gpt2.o dolly.o ggml.o common-ggml.o common.o
 
 generic-gpt2.o: gpt2.cpp generic-ggml.o
 	$(CXX) $(CXXFLAGS) gpt2.cpp ggml.o -o gpt2.o -c $(LDFLAGS)
