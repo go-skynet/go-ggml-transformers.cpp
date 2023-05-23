@@ -1,7 +1,7 @@
 package gpt2_test
 
 import (
-	. "github.com/go-skynet/go-gpt2.cpp"
+	. "github.com/go-skynet/go-ggml-transformers.cpp"
 	. "github.com/onsi/ginkgo/v2"
 	. "github.com/onsi/gomega"
 )
