@@ -1,4 +1,4 @@
-module github.com/go-skynet/go-gpt2.cpp
+module github.com/go-skynet/go-ggml-transformers.cpp
 
 go 1.19
 

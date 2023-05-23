@@ -8,7 +8,7 @@ import (
 	"os"
 	"strings"
 
-	gpt2 "github.com/go-skynet/go-gpt2.cpp"
+	gpt2 "github.com/go-skynet/go-ggml-transformers.cpp"
 )
 
 var (

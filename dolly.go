@@ -4,7 +4,7 @@ package gpt2
 // #cgo CXXFLAGS: -I./ggml.cpp/include/ggml/ -I./ggml.cpp/examples/ -I./ggml.cpp/src/
 // #cgo darwin LDFLAGS: -framework Accelerate
 // #cgo darwin CXXFLAGS: -std=c++17
-// #cgo LDFLAGS: -lgpt2 -lm -lstdc++
+// #cgo LDFLAGS: -ltransformers -lm -lstdc++
 // #include <dolly.h>
 import "C"
 import (

@@ -707,7 +707,6 @@ int gptj_predict(void* params_ptr, void* state_pr, char* result) {
             i += embd.size() - 1;
         }
 
-
         // display text
         for (auto id : embd) {
             res += vocab.id_to_token[id].c_str();

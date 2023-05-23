@@ -179,11 +179,11 @@ gptneox.o: gptneox.cpp
 starcoder.o: starcoder.cpp
 	$(CXX) $(CXXFLAGS) starcoder.cpp -o starcoder.o -c $(LDFLAGS)
 
-libgpt2.a: starcoder.o gptj.o mpt.o gpt2.o replit.o gptneox.o ggml.o dolly.o common-ggml.o common.o
-	ar src libgpt2.a replit.o gptj.o mpt.o gptneox.o starcoder.o gpt2.o dolly.o ggml.o common-ggml.o common.o
+libtransformers.a: starcoder.o gptj.o mpt.o gpt2.o replit.o gptneox.o ggml.o dolly.o common-ggml.o common.o
+	ar src libtransformers.a replit.o gptj.o mpt.o gptneox.o starcoder.o gpt2.o dolly.o ggml.o common-ggml.o common.o
 
 example: 
 	@C_INCLUDE_PATH=${INCLUDE_PATH} LIBRARY_PATH=${LIBRARY_PATH} go build -o example -x ./examples
 
-test: libgpt2.a
+test: libtransformers.a
 	@C_INCLUDE_PATH=${INCLUDE_PATH} LIBRARY_PATH=${LIBRARY_PATH} go test -v ./...
