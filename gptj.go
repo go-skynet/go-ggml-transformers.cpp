@@ -56,5 +56,5 @@ func (l *GPTJ) Predict(text string, opts ...PredictOption) (string, error) {
 }
 
 func (l *GPTJ) Free() {
-	C.gptj_free_model(l.state)
+	C.gptj_free_model_state(l.state)
 }

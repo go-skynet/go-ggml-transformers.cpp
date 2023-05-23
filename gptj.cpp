@@ -742,11 +742,11 @@ int gptj_bootstrap(const char *model_path, void* state_pr)
     return 0;
 }
 
-void*  gptj_allocate_state() {
+void* gptj_allocate_state() {
     return new  gptj_state;
 }
 
-void  gptj_free_model(void *state_ptr) {
+void gptj_free_model_state(void *state_ptr) {
      gptj_state* state = ( gptj_state*) state_ptr;
     ggml_free(state->model.ctx);
 }
