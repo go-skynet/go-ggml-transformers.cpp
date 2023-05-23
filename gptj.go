@@ -5,7 +5,7 @@ package gpt2
 // #cgo darwin LDFLAGS: -framework Accelerate
 // #cgo darwin CXXFLAGS: -std=c++17
 // #cgo LDFLAGS: -lgpt2 -lm -lstdc++
-// #include <redpajama.h>
+// #include <gptj.h>
 import "C"
 import (
 	"fmt"
@@ -13,22 +13,22 @@ import (
 	"unsafe"
 )
 
-type RedPajama struct {
+type GPTJ struct {
 	state unsafe.Pointer
 }
 
-func NewRedPajama(model string) (*RedPajama, error) {
-	state := C.redpajama_allocate_state()
+func NewGPTJ(model string) (*GPTJ, error) {
+	state := C.gptj_allocate_state()
 	modelPath := C.CString(model)
-	result := C.redpajama_bootstrap(modelPath, state)
+	result := C.gptj_bootstrap(modelPath, state)
 	if result != 0 {
 		return nil, fmt.Errorf("failed loading model")
 	}
 
-	return &RedPajama{state: state}, nil
+	return &GPTJ{state: state}, nil
 }
 
-func (l *RedPajama) Predict(text string, opts ...PredictOption) (string, error) {
+func (l *GPTJ) Predict(text string, opts ...PredictOption) (string, error) {
 
 	po := NewPredictOptions(opts...)
 
@@ -38,9 +38,9 @@ func (l *RedPajama) Predict(text string, opts ...PredictOption) (string, error) 
 	}
 	out := make([]byte, po.Tokens)
 
-	params := C.redpajama_allocate_params(input, C.int(po.Seed), C.int(po.Threads), C.int(po.Tokens), C.int(po.TopK),
+	params := C.gptj_allocate_params(input, C.int(po.Seed), C.int(po.Threads), C.int(po.Tokens), C.int(po.TopK),
 		C.float(po.TopP), C.float(po.Temperature), C.int(po.Batch))
-	ret := C.redpajama_predict(params, l.state, (*C.char)(unsafe.Pointer(&out[0])))
+	ret := C.gptj_predict(params, l.state, (*C.char)(unsafe.Pointer(&out[0])))
 	if ret != 0 {
 		return "", fmt.Errorf("inference failed")
 	}
@@ -50,11 +50,11 @@ func (l *RedPajama) Predict(text string, opts ...PredictOption) (string, error) 
 	res = strings.TrimPrefix(res, text)
 	res = strings.TrimPrefix(res, "\n")
 	res = strings.TrimSuffix(res, "<|endoftext|>")
-	C.redpajama_free_params(params)
+	C.gptj_free_params(params)
 
 	return res, nil
 }
 
-func (l *RedPajama) Free() {
-	C.redpajama_free_model(l.state)
+func (l *GPTJ) Free() {
+	C.gptj_free_model(l.state)
 }

@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <cinttypes>
 #include <fstream>
 #include <map>
 #include <string>
@@ -24,6 +25,7 @@ struct dollyv2_hparams {
     int32_t n_head  = 32;    // model.config.num_attention_heads
     int32_t n_layer = 32;    // model.config.num_hidden_layers
     int32_t n_rot   = 20;    // rotary_pct[25%] * (n_embd / n_head)
+    int32_t par_res = 1; // 1 = true, 0 = false
     int32_t ftype   = GGML_FTYPE_MOSTLY_F16;
 };
 
@@ -74,7 +76,6 @@ struct dollyv2_model {
     std::map<std::string, struct ggml_tensor *> tensors;
 };
 
-
 struct dolly_state {
     gpt_vocab vocab;
     dollyv2_model model;
@@ -84,7 +85,6 @@ struct dolly_state {
         int64_t t_predict_us = -1;
     } timing;
 };
-
 
 // load the model's weights from a file
 bool dollyv2_model_load(const std::string & fname, dollyv2_model & model, gpt_vocab & vocab) {
@@ -116,7 +116,10 @@ bool dollyv2_model_load(const std::string & fname, dollyv2_model & model, gpt_vo
         fin.read((char *) &hparams.n_head,  sizeof(hparams.n_head));
         fin.read((char *) &hparams.n_layer, sizeof(hparams.n_layer));
         fin.read((char *) &hparams.n_rot,   sizeof(hparams.n_rot));
+        fin.read((char *) &hparams.par_res, sizeof(hparams.par_res));
         fin.read((char *) &hparams.ftype,   sizeof(hparams.ftype));
+
+        const int32_t qntvr = hparams.ftype / GGML_QNT_VERSION_FACTOR;
 
         printf("%s: n_vocab = %d\n", __func__, hparams.n_vocab);
         printf("%s: n_ctx   = %d\n", __func__, hparams.n_ctx);
@@ -124,7 +127,11 @@ bool dollyv2_model_load(const std::string & fname, dollyv2_model & model, gpt_vo
         printf("%s: n_head  = %d\n", __func__, hparams.n_head);
         printf("%s: n_layer = %d\n", __func__, hparams.n_layer);
         printf("%s: n_rot   = %d\n", __func__, hparams.n_rot);
+        printf("%s: par_res = %d\n", __func__, hparams.par_res);
         printf("%s: ftype   = %d\n", __func__, hparams.ftype);
+        printf("%s: qntvr   = %d\n", __func__, qntvr);
+
+        hparams.ftype %= GGML_QNT_VERSION_FACTOR;
     }
 
     // load vocab
@@ -132,12 +139,15 @@ bool dollyv2_model_load(const std::string & fname, dollyv2_model & model, gpt_vo
         const int32_t n_vocab = model.hparams.n_vocab;
 
         std::string word;
+        std::vector<char> buf(128);
+
         for (int i = 0; i < n_vocab; i++) {
             uint32_t len;
             fin.read((char *) &len, sizeof(len));
 
-            word.resize(len);
-            fin.read((char *) word.data(), len);
+            buf.resize(len);
+            fin.read((char *) buf.data(), len);
+            word.assign(buf.data(), len);
 
             vocab.token_to_id[word] = i;
             vocab.id_to_token[i] = word;
@@ -198,7 +208,7 @@ bool dollyv2_model_load(const std::string & fname, dollyv2_model & model, gpt_vo
         ctx_size += n_ctx*n_layer*n_embd*ggml_type_sizef(GGML_TYPE_F32); // memory_k
         ctx_size += n_ctx*n_layer*n_embd*ggml_type_sizef(GGML_TYPE_F32); // memory_v
 
-        ctx_size += (6 + 16*n_layer)*256; // object overhead
+        ctx_size += (6 + 16*n_layer)*512; // object overhead
 
         printf("%s: ggml ctx size = %6.2f MB\n", __func__, ctx_size/(1024.0*1024.0));
     }
@@ -224,7 +234,6 @@ bool dollyv2_model_load(const std::string & fname, dollyv2_model & model, gpt_vo
 
         const int n_embd  = hparams.n_embd;
         const int n_layer = hparams.n_layer;
-        const int n_ctx   = hparams.n_ctx;
         const int n_vocab = hparams.n_vocab;
 
         model.layers.resize(n_layer);
@@ -307,7 +316,7 @@ bool dollyv2_model_load(const std::string & fname, dollyv2_model & model, gpt_vo
 
         const size_t memory_size = ggml_nbytes(model.memory_k) + ggml_nbytes(model.memory_v);
 
-        printf("%s: memory_size = %8.2f MB, n_mem = %lld\n", __func__, memory_size/1024.0/1024.0, n_mem);
+        printf("%s: memory_size = %8.2f MB, n_mem = %" PRId64 "\n", __func__, memory_size/1024.0/1024.0, n_mem);
     }
 
     // load weights
@@ -387,6 +396,42 @@ bool dollyv2_model_load(const std::string & fname, dollyv2_model & model, gpt_vo
     fin.close();
 
     return true;
+}
+
+// feed-forward network
+ggml_tensor * gpt_neox_ff(
+        const dollyv2_layer &layer,
+        ggml_context * ctx0,
+        ggml_tensor * inp) {
+    ggml_tensor * cur = ggml_norm(ctx0, inp);
+
+    cur = ggml_add(ctx0,
+        ggml_mul(ctx0,
+            ggml_repeat(ctx0, layer.ln_2_g, cur),
+            cur),
+        ggml_repeat(ctx0, layer.ln_2_b, cur));
+
+    cur = ggml_mul_mat(ctx0,
+            layer.c_mlp_fc_w,
+            cur);
+
+    cur = ggml_add(ctx0,
+            ggml_repeat(ctx0, layer.c_mlp_fc_b, cur),
+            cur);
+
+    // GELU activation
+    cur = ggml_gelu(ctx0, cur);
+
+    // projection
+    // cur = proj_w*cur + proj_b
+    cur = ggml_mul_mat(ctx0,
+            layer.c_mlp_proj_w,
+            cur);
+
+    cur = ggml_add(ctx0,
+            ggml_repeat(ctx0, layer.c_mlp_proj_b, cur),
+            cur);
+    return cur;
 }
 
 // evaluate the transformer
@@ -478,8 +523,8 @@ bool dollyv2_eval(
             struct ggml_tensor * Vcur = ggml_cont(ctx0, ggml_view_3d(ctx0, cur, n_embd/n_head, n_head, N, cur->nb[1]/n_head, cur->nb[1], 2*sizeof(float)*n_embd/n_head));
 
             // using mode = 2 for GPT-NeoX mode
-            Qcur = ggml_rope(ctx0, Qcur, n_past, n_rot, 2);
-            Kcur = ggml_rope(ctx0, Kcur, n_past, n_rot, 2);
+            Qcur = ggml_rope_inplace(ctx0, Qcur, n_past, n_rot, 2);
+            Kcur = ggml_rope_inplace(ctx0, Kcur, n_past, n_rot, 2);
 
             // store key and value to memory
             {
@@ -513,16 +558,16 @@ bool dollyv2_eval(
 
             // KQ_scaled = KQ / sqrt(n_embd/n_head)
             struct ggml_tensor * KQ_scaled =
-                ggml_scale(ctx0,
+                ggml_scale_inplace(ctx0,
                         KQ,
                         ggml_new_f32(ctx0, 1.0f/sqrt(float(n_embd)/n_head))
                         );
 
             // KQ_masked = mask_past(KQ_scaled)
-            struct ggml_tensor * KQ_masked = ggml_diag_mask_inf(ctx0, KQ_scaled, n_past);
+            struct ggml_tensor * KQ_masked = ggml_diag_mask_inf_inplace(ctx0, KQ_scaled, n_past);
 
             // KQ = soft_max(KQ_masked)
-            struct ggml_tensor * KQ_soft_max = ggml_soft_max(ctx0, KQ_masked);
+            struct ggml_tensor * KQ_soft_max = ggml_soft_max_inplace(ctx0, KQ_masked);
 
             // V_trans = Vmem.view(n_embd/n_head, n_head, n_past + N).permute(1, 2, 0, 3).contiguous()
             struct ggml_tensor * V =
@@ -553,50 +598,27 @@ bool dollyv2_eval(
             }
         }
 
-        struct ggml_tensor * inpFF = cur;
+        if (hparams.par_res == 0) {
+            struct ggml_tensor * inpFF = ggml_add(ctx0, cur, inpL);
 
-        // feed-forward network
-        // this is independent of the self-attention result, so it could be done in parallel to the self-attention
-        {
-            // post attention layer norm
+            cur = gpt_neox_ff(model.layers[il], ctx0, inpFF);
+
+            // input for next layer
+            inpL = ggml_add(ctx0, cur, inpFF);
+        } else {
+            struct ggml_tensor * inpFF = cur;
+
+            // this is independent of the self-attention result, so it could be done in parallel to the self-attention
             // note here we pass inpL instead of cur
-            {
-                cur = ggml_norm(ctx0, inpL);
+            cur = gpt_neox_ff(model.layers[il], ctx0, inpL);
 
-                cur = ggml_add(ctx0,
-                    ggml_mul(ctx0,
-                        ggml_repeat(ctx0, model.layers[il].ln_2_g, cur),
-                        cur),
-                    ggml_repeat(ctx0, model.layers[il].ln_2_b, cur));
-            }
+            // layer input + FF
+            cur  = ggml_add(ctx0, cur, inpFF);
 
-            cur = ggml_mul_mat(ctx0,
-                    model.layers[il].c_mlp_fc_w,
-                    cur);
-
-            cur = ggml_add(ctx0,
-                    ggml_repeat(ctx0, model.layers[il].c_mlp_fc_b, cur),
-                    cur);
-
-            // GELU activation
-            cur = ggml_gelu(ctx0, cur);
-
-            // projection
-            // cur = proj_w*cur + proj_b
-            cur = ggml_mul_mat(ctx0,
-                    model.layers[il].c_mlp_proj_w,
-                    cur);
-
-            cur = ggml_add(ctx0,
-                    ggml_repeat(ctx0, model.layers[il].c_mlp_proj_b, cur),
-                    cur);
+            // input for next layer
+            inpL = ggml_add(ctx0, cur, inpL);
         }
 
-        // layer input + FF
-        cur  = ggml_add(ctx0, cur, inpFF);
-
-        // input for next layer
-        inpL = ggml_add(ctx0, cur, inpL);
     }
 
     // norm
@@ -621,7 +643,7 @@ bool dollyv2_eval(
     }
 
     // logits -> probs
-    //inpL = ggml_soft_max(ctx0, inpL);
+    //inpL = ggml_soft_max_inplace(ctx0, inpL);
 
     // run the computation
     ggml_build_forward_expand(&gf, inpL);
@@ -645,7 +667,6 @@ bool dollyv2_eval(
     //printf("used_mem = %zu\n", ggml_used_mem(ctx0));
 
     ggml_free(ctx0);
-
     return true;
 }
 

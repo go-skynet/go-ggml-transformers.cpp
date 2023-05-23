@@ -114,12 +114,17 @@ bool starcoder_model_load(const std::string & fname, starcoder_model & model, gp
         fin.read((char *) &hparams.n_layer, sizeof(hparams.n_layer));
         fin.read((char *) &hparams.ftype,   sizeof(hparams.ftype));
 
+        const int32_t qntvr = hparams.ftype / GGML_QNT_VERSION_FACTOR;
+
         printf("%s: n_vocab = %d\n", __func__, hparams.n_vocab);
         printf("%s: n_ctx   = %d\n", __func__, hparams.n_ctx);
         printf("%s: n_embd  = %d\n", __func__, hparams.n_embd);
         printf("%s: n_head  = %d\n", __func__, hparams.n_head);
         printf("%s: n_layer = %d\n", __func__, hparams.n_layer);
         printf("%s: ftype   = %d\n", __func__, hparams.ftype);
+        printf("%s: qntvr   = %d\n", __func__, qntvr);
+
+        hparams.ftype %= GGML_QNT_VERSION_FACTOR;
     }
 
     // load vocab
@@ -134,12 +139,15 @@ bool starcoder_model_load(const std::string & fname, starcoder_model & model, gp
         }
 
         std::string word;
+        std::vector<char> buf(128);
+
         for (int i = 0; i < n_vocab; i++) {
             uint32_t len;
             fin.read((char *) &len, sizeof(len));
 
-            word.resize(len);
-            fin.read((char *) word.data(), len);
+            buf.resize(len);
+            fin.read((char *) buf.data(), len);
+            word.assign(buf.data(), len);
 
             vocab.token_to_id[word] = i;
             vocab.id_to_token[i] = word;
@@ -168,10 +176,10 @@ bool starcoder_model_load(const std::string & fname, starcoder_model & model, gp
         const int n_layer = hparams.n_layer;
         const int n_ctx   = hparams.n_ctx;
         const int n_vocab = hparams.n_vocab;
+
         const int head_dim = n_embd / hparams.n_head;
         const int kv_heads = hparams.n_head; // 1 if MQA else hparams.n_head
         const int kv_dim   = kv_heads * head_dim;
-
 
         ctx_size += n_embd*ggml_type_sizef(GGML_TYPE_F32); // ln_f_g
         ctx_size += n_embd*ggml_type_sizef(GGML_TYPE_F32); // ln_f_b
@@ -201,7 +209,7 @@ bool starcoder_model_load(const std::string & fname, starcoder_model & model, gp
         ctx_size += n_ctx*n_layer*n_embd*ggml_type_sizef(GGML_TYPE_F32); // memory_k
         ctx_size += n_ctx*n_layer*n_embd*ggml_type_sizef(GGML_TYPE_F32); // memory_v
 
-        ctx_size += (6 + 12*n_layer)*256; // object overhead
+        ctx_size += (6 + 12*n_layer)*512; // object overhead
 
         printf("%s: ggml ctx size = %6.2f MB\n", __func__, ctx_size/(1024.0*1024.0));
     }
@@ -230,7 +238,6 @@ bool starcoder_model_load(const std::string & fname, starcoder_model & model, gp
         const int n_ctx   = hparams.n_ctx;
         const int n_vocab = hparams.n_vocab;
 
-        // MQA
         const int head_dim = n_embd / hparams.n_head;
         const int kv_heads = hparams.n_head; // 1 if MQA else hparams.n_head
         const int kv_dim   = kv_heads * head_dim;
@@ -422,6 +429,14 @@ bool starcoder_eval(
     static size_t buf_size = 256u*1024*1024;
     static void * buf = malloc(buf_size);
 
+    // use 2 scratch buffers
+    // TODO: very hacky solution - reimplement in a more elegant way
+    static size_t scr0_size = 256u*1024*1024;
+    static void * scr0 = malloc(scr0_size);
+
+    static size_t scr1_size = 256u*1024*1024;
+    static void * scr1 = malloc(scr1_size);
+
     if (mem_per_token > 0 && mem_per_token*N > buf_size) {
         const size_t buf_size_new = 1.1*(mem_per_token*N); // add 10% to account for ggml object overhead
         //printf("\n%s: reallocating buffer from %zu to %zu bytes\n", __func__, buf_size, buf_size_new);
@@ -461,6 +476,8 @@ bool starcoder_eval(
 
     for (int il = 0; il < n_layer; ++il) {
         struct ggml_tensor * cur;
+
+        ggml_set_scratch(ctx0, { 0, scr0_size, scr0, });
 
         // norm
         {
@@ -525,7 +542,7 @@ bool starcoder_eval(
                         ggml_reshape_3d(ctx0,
                             ggml_view_1d(ctx0, model.memory_k, (n_past + N)*n_embd, il*n_ctx*ggml_element_size(model.memory_k)*n_embd),
                             n_embd/n_head, n_head, n_past + N),
-                        0, 2, 1, 3);
+                        0, 2, 1, 3); //TODO: need to be tiled
 
             // GG: flash attention
             //struct ggml_tensor * V =
@@ -541,23 +558,23 @@ bool starcoder_eval(
 
             // K * Q
             // [n_past + N, N, 12]
-            struct ggml_tensor * KQ = ggml_mul_mat(ctx0, K, Q);
+            struct ggml_tensor * KQ = ggml_mul_mat(ctx0, K, Q); //TODO: check if it broadcasts
 
             // KQ_scaled = KQ / sqrt(n_embd/n_head)
             // [n_past + N, N, 12]
             struct ggml_tensor * KQ_scaled =
-                ggml_scale(ctx0,
+                ggml_scale_inplace(ctx0,
                         KQ,
                         ggml_new_f32(ctx0, 1.0f/sqrt(float(n_embd)/n_head))
                         );
 
             // KQ_masked = mask_past(KQ_scaled)
             // [n_past + N, N, 12]
-            struct ggml_tensor * KQ_masked = ggml_diag_mask_inf(ctx0, KQ_scaled, n_past);
+            struct ggml_tensor * KQ_masked = ggml_diag_mask_inf_inplace(ctx0, KQ_scaled, n_past);
 
             // KQ = soft_max(KQ_masked)
             // [n_past + N, N, 12]
-            struct ggml_tensor * KQ_soft_max = ggml_soft_max(ctx0, KQ_masked);
+            struct ggml_tensor * KQ_soft_max = ggml_soft_max_inplace(ctx0, KQ_masked);
 
             // V_trans = Vmem.view(n_embd/n_head, n_head, n_past + N).permute(1, 2, 0, 3).contiguous()
             // [n_past + N, 64, 12]
@@ -607,6 +624,8 @@ bool starcoder_eval(
         cur = ggml_add(ctx0, cur, inpL);
 
         struct ggml_tensor * inpFF = cur;
+
+        ggml_set_scratch(ctx0, { 0, scr1_size, scr1, });
 
         // feed-forward network
         {
@@ -664,6 +683,8 @@ bool starcoder_eval(
         inpL = ggml_add(ctx0, cur, inpFF);
     }
 
+    ggml_set_scratch(ctx0, { 0, scr0_size, scr0, });
+
     // norm
     {
         // [ 768, N]
@@ -678,13 +699,15 @@ bool starcoder_eval(
                 ggml_repeat(ctx0, model.ln_f_b, inpL));
     }
 
+    ggml_set_scratch(ctx0, { 0, 0, nullptr, });
+
     // inpL = WTE * inpL
     // [ 768, 50257] - model.lm_head
     // [ 768, N]     - inpL
     inpL = ggml_mul_mat(ctx0, model.lm_head, inpL);
 
     // logits -> probs
-    //inpL = ggml_soft_max(ctx0, inpL);
+    //inpL = ggml_soft_max_inplace(ctx0, inpL);
 
     // run the computation
     ggml_build_forward_expand(&gf, inpL);
@@ -705,7 +728,7 @@ bool starcoder_eval(
     if (mem_per_token == 0) {
         mem_per_token = ggml_used_mem(ctx0)/N;
     }
-    //printf("used_mem = %zu\n", ggml_used_mem(ctx0));
+    //printf("used_mem = %zu MB\n", ggml_used_mem(ctx0)/(1024*1024));
 
     ggml_free(ctx0);
 

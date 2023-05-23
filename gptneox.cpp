@@ -9,6 +9,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <cinttypes>
 #include <fstream>
 #include <map>
 #include <string>
@@ -85,7 +86,6 @@ struct gpt_neox_state {
     } timing;
 };
 
-
 // load the model's weights from a file
 bool gpt_neox_model_load(const std::string & fname, gpt_neox_model & model, gpt_vocab & vocab) {
     printf("%s: loading model from '%s' - please wait ...\n", __func__, fname.c_str());
@@ -119,6 +119,8 @@ bool gpt_neox_model_load(const std::string & fname, gpt_neox_model & model, gpt_
         fin.read((char *) &hparams.par_res, sizeof(hparams.par_res));
         fin.read((char *) &hparams.ftype,   sizeof(hparams.ftype));
 
+        const int32_t qntvr = hparams.ftype / GGML_QNT_VERSION_FACTOR;
+
         printf("%s: n_vocab = %d\n", __func__, hparams.n_vocab);
         printf("%s: n_ctx   = %d\n", __func__, hparams.n_ctx);
         printf("%s: n_embd  = %d\n", __func__, hparams.n_embd);
@@ -127,6 +129,9 @@ bool gpt_neox_model_load(const std::string & fname, gpt_neox_model & model, gpt_
         printf("%s: n_rot   = %d\n", __func__, hparams.n_rot);
         printf("%s: par_res = %d\n", __func__, hparams.par_res);
         printf("%s: ftype   = %d\n", __func__, hparams.ftype);
+        printf("%s: qntvr   = %d\n", __func__, qntvr);
+
+        hparams.ftype %= GGML_QNT_VERSION_FACTOR;
     }
 
     // load vocab
@@ -134,12 +139,15 @@ bool gpt_neox_model_load(const std::string & fname, gpt_neox_model & model, gpt_
         const int32_t n_vocab = model.hparams.n_vocab;
 
         std::string word;
+        std::vector<char> buf(128);
+
         for (int i = 0; i < n_vocab; i++) {
             uint32_t len;
             fin.read((char *) &len, sizeof(len));
 
-            word.resize(len);
-            fin.read((char *) word.data(), len);
+            buf.resize(len);
+            fin.read((char *) buf.data(), len);
+            word.assign(buf.data(), len);
 
             vocab.token_to_id[word] = i;
             vocab.id_to_token[i] = word;
@@ -196,7 +204,7 @@ bool gpt_neox_model_load(const std::string & fname, gpt_neox_model & model, gpt_
         ctx_size += n_ctx*n_layer*n_embd*ggml_type_sizef(GGML_TYPE_F32); // memory_k
         ctx_size += n_ctx*n_layer*n_embd*ggml_type_sizef(GGML_TYPE_F32); // memory_v
 
-        ctx_size += (6 + 16*n_layer)*256; // object overhead
+        ctx_size += (6 + 16*n_layer)*512; // object overhead
 
         printf("%s: ggml ctx size = %6.2f MB\n", __func__, ctx_size/(1024.0*1024.0));
     }
@@ -222,7 +230,6 @@ bool gpt_neox_model_load(const std::string & fname, gpt_neox_model & model, gpt_
 
         const int n_embd  = hparams.n_embd;
         const int n_layer = hparams.n_layer;
-        const int n_ctx   = hparams.n_ctx;
         const int n_vocab = hparams.n_vocab;
 
         model.layers.resize(n_layer);
@@ -302,7 +309,7 @@ bool gpt_neox_model_load(const std::string & fname, gpt_neox_model & model, gpt_
 
         const size_t memory_size = ggml_nbytes(model.memory_k) + ggml_nbytes(model.memory_v);
 
-        printf("%s: memory_size = %8.2f MB, n_mem = %lld\n", __func__, memory_size/1024.0/1024.0, n_mem);
+        printf("%s: memory_size = %8.2f MB, n_mem = %" PRId64 "\n", __func__, memory_size/1024.0/1024.0, n_mem);
     }
 
     // load weights
@@ -450,6 +457,14 @@ bool gpt_neox_eval(
     static size_t buf_size = 256u*1024*1024;
     static void * buf = malloc(buf_size);
 
+    // use 2 scratch buffers
+    // TODO: very hacky solution - reimplement in a more elegant way
+    static size_t scr0_size = 256u*1024*1024;
+    static void * scr0 = malloc(scr0_size);
+
+    static size_t scr1_size = 256u*1024*1024;
+    static void * scr1 = malloc(scr1_size);
+
     if (mem_per_token > 0 && mem_per_token*N > buf_size) {
         const size_t buf_size_new = 1.1*(mem_per_token*N); // add 10% to account for ggml object overhead
         //printf("\n%s: reallocating buffer from %zu to %zu bytes\n", __func__, buf_size, buf_size_new);
@@ -482,6 +497,8 @@ bool gpt_neox_eval(
     for (int il = 0; il < n_layer; ++il) {
         struct ggml_tensor * cur;
 
+        ggml_set_scratch(ctx0, { 0, scr0_size, scr0, });
+
         // self-attention
         {
             {
@@ -510,8 +527,8 @@ bool gpt_neox_eval(
             struct ggml_tensor * Vcur = ggml_cont(ctx0, ggml_view_3d(ctx0, cur, n_embd/n_head, n_head, N, cur->nb[1]/n_head, cur->nb[1], 2*sizeof(float)*n_embd/n_head));
 
             // using mode = 2 for GPT-NeoX mode
-            Qcur = ggml_rope(ctx0, Qcur, n_past, n_rot, 2);
-            Kcur = ggml_rope(ctx0, Kcur, n_past, n_rot, 2);
+            Qcur = ggml_rope_inplace(ctx0, Qcur, n_past, n_rot, 2);
+            Kcur = ggml_rope_inplace(ctx0, Kcur, n_past, n_rot, 2);
 
             // store key and value to memory
             {
@@ -545,16 +562,16 @@ bool gpt_neox_eval(
 
             // KQ_scaled = KQ / sqrt(n_embd/n_head)
             struct ggml_tensor * KQ_scaled =
-                ggml_scale(ctx0,
+                ggml_scale_inplace(ctx0,
                         KQ,
                         ggml_new_f32(ctx0, 1.0f/sqrt(float(n_embd)/n_head))
                         );
 
             // KQ_masked = mask_past(KQ_scaled)
-            struct ggml_tensor * KQ_masked = ggml_diag_mask_inf(ctx0, KQ_scaled, n_past);
+            struct ggml_tensor * KQ_masked = ggml_diag_mask_inf_inplace(ctx0, KQ_scaled, n_past);
 
             // KQ = soft_max(KQ_masked)
-            struct ggml_tensor * KQ_soft_max = ggml_soft_max(ctx0, KQ_masked);
+            struct ggml_tensor * KQ_soft_max = ggml_soft_max_inplace(ctx0, KQ_masked);
 
             // V_trans = Vmem.view(n_embd/n_head, n_head, n_past + N).permute(1, 2, 0, 3).contiguous()
             struct ggml_tensor * V =
@@ -585,6 +602,8 @@ bool gpt_neox_eval(
             }
         }
 
+        ggml_set_scratch(ctx0, { 0, scr1_size, scr1, });
+
         if (hparams.par_res == 0) {
             struct ggml_tensor * inpFF = ggml_add(ctx0, cur, inpL);
 
@@ -607,6 +626,8 @@ bool gpt_neox_eval(
         }
     }
 
+    ggml_set_scratch(ctx0, { 0, scr0_size, scr0, });
+
     // norm
     {
         inpL = ggml_norm(ctx0, inpL);
@@ -619,6 +640,8 @@ bool gpt_neox_eval(
                 ggml_repeat(ctx0, model.ln_f_b, inpL));
     }
 
+    ggml_set_scratch(ctx0, { 0, 0, nullptr, });
+
     // lm_head
     {
         inpL = ggml_mul_mat(ctx0, model.lmh_g, inpL);
@@ -629,7 +652,7 @@ bool gpt_neox_eval(
     }
 
     // logits -> probs
-    //inpL = ggml_soft_max(ctx0, inpL);
+    //inpL = ggml_soft_max_inplace(ctx0, inpL);
 
     // run the computation
     ggml_build_forward_expand(&gf, inpL);

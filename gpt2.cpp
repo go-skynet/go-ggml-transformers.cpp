@@ -21,7 +21,7 @@ struct gpt2_hparams {
     int32_t n_embd  = 768;
     int32_t n_head  = 12;
     int32_t n_layer = 12;
-    int32_t f16     = 1;
+    int32_t ftype   = 1;
 };
 
 struct gpt2_layer {
@@ -108,14 +108,19 @@ bool gpt2_model_load(const std::string & fname, gpt2_model & model, gpt_vocab & 
         fin.read((char *) &hparams.n_embd,  sizeof(hparams.n_embd));
         fin.read((char *) &hparams.n_head,  sizeof(hparams.n_head));
         fin.read((char *) &hparams.n_layer, sizeof(hparams.n_layer));
-        fin.read((char *) &hparams.f16,     sizeof(hparams.f16));
-        //hparams.n_ctx = n_ctx;
+        fin.read((char *) &hparams.ftype,   sizeof(hparams.ftype));
+
+        const int32_t qntvr = hparams.ftype / GGML_QNT_VERSION_FACTOR;
+
         printf("%s: n_vocab = %d\n", __func__, hparams.n_vocab);
         printf("%s: n_ctx   = %d\n", __func__, hparams.n_ctx);
         printf("%s: n_embd  = %d\n", __func__, hparams.n_embd);
         printf("%s: n_head  = %d\n", __func__, hparams.n_head);
         printf("%s: n_layer = %d\n", __func__, hparams.n_layer);
-        printf("%s: f16     = %d\n", __func__, hparams.f16);
+        printf("%s: ftype   = %d\n", __func__, hparams.ftype);
+        printf("%s: qntvr   = %d\n", __func__, qntvr);
+
+        hparams.ftype %= GGML_QNT_VERSION_FACTOR;
     }
 
     // load vocab
@@ -130,12 +135,15 @@ bool gpt2_model_load(const std::string & fname, gpt2_model & model, gpt_vocab & 
         }
 
         std::string word;
+        std::vector<char> buf(128);
+
         for (int i = 0; i < n_vocab; i++) {
             uint32_t len;
             fin.read((char *) &len, sizeof(len));
 
-            word.resize(len);
-            fin.read((char *) word.data(), len);
+            buf.resize(len);
+            fin.read((char *) buf.data(), len);
+            word.assign(buf.data(), len);
 
             vocab.token_to_id[word] = i;
             vocab.id_to_token[i] = word;
@@ -144,21 +152,12 @@ bool gpt2_model_load(const std::string & fname, gpt2_model & model, gpt_vocab & 
 
     // for the big tensors, we have the option to store the data in 16-bit floats or quantized
     // in order to save memory and also to speed up the computation
-    ggml_type wtype = GGML_TYPE_COUNT;
-    switch (model.hparams.f16) {
-        case 0: wtype = GGML_TYPE_F32;  break;
-        case 1: wtype = GGML_TYPE_F16;  break;
-        case 2: wtype = GGML_TYPE_Q4_0; break;
-        case 3: wtype = GGML_TYPE_Q4_1; break;
-        default:
-                {
-                    fprintf(stderr, "%s: invalid model file '%s' (bad f16 value %d)\n",
-                            __func__, fname.c_str(), model.hparams.f16);
-                    return false;
-                }
+    ggml_type wtype = ggml_ftype_to_ggml_type((ggml_ftype) (model.hparams.ftype));
+    if (wtype == GGML_TYPE_COUNT) {
+        fprintf(stderr, "%s: invalid model file '%s' (bad ftype value %d)\n",
+                __func__, fname.c_str(), model.hparams.ftype);
+        return false;
     }
-
-    const ggml_type wtype2 = GGML_TYPE_F32;
 
     auto & ctx = model.ctx;
 
@@ -200,8 +199,9 @@ bool gpt2_model_load(const std::string & fname, gpt2_model & model, gpt_vocab & 
         ctx_size += n_ctx*n_layer*n_embd*ggml_type_sizef(GGML_TYPE_F32); // memory_k
         ctx_size += n_ctx*n_layer*n_embd*ggml_type_sizef(GGML_TYPE_F32); // memory_v
 
-        ctx_size += (6 + 12*n_layer)*256; // object overhead
+        ctx_size += (6 + 12*n_layer)*512; // object overhead
 
+        printf("%s: ggml tensor size = %d bytes\n", __func__, (int) sizeof(ggml_tensor));
         printf("%s: ggml ctx size = %6.2f MB\n", __func__, ctx_size/(1024.0*1024.0));
     }
 
@@ -316,22 +316,20 @@ bool gpt2_model_load(const std::string & fname, gpt2_model & model, gpt_vocab & 
         while (true) {
             int32_t n_dims;
             int32_t length;
-            int32_t ftype;
+            int32_t ttype;
 
             fin.read(reinterpret_cast<char *>(&n_dims), sizeof(n_dims));
             fin.read(reinterpret_cast<char *>(&length), sizeof(length));
-            fin.read(reinterpret_cast<char *>(&ftype),  sizeof(ftype));
+            fin.read(reinterpret_cast<char *>(&ttype),  sizeof(ttype));
 
             if (fin.eof()) {
                 break;
             }
 
             int32_t nelements = 1;
-            int64_t ne[2] = { 1, 1 };
+            int32_t ne[2] = { 1, 1 };
             for (int i = 0; i < n_dims; ++i) {
-                int32_t ne_cur;
-                fin.read(reinterpret_cast<char *>(&ne_cur), sizeof(ne_cur));
-                ne[i] = ne_cur;
+                fin.read(reinterpret_cast<char *>(&ne[i]), sizeof(ne[i]));
                 nelements *= ne[i];
             }
 
@@ -350,29 +348,17 @@ bool gpt2_model_load(const std::string & fname, gpt2_model & model, gpt_vocab & 
             }
 
             if (tensor->ne[0] != ne[0] || tensor->ne[1] != ne[1]) {
-                fprintf(stderr, "%s: tensor '%s' has wrong shape in model file: got [%lld, %lld], expected [%lld, %lld]\n",
-                        __func__, name.data(), tensor->ne[0], tensor->ne[1], ne[0], ne[1]);
+                fprintf(stderr, "%s: tensor '%s' has wrong shape in model file: got [%d, %d], expected [%d, %d]\n",
+                        __func__, name.data(), (int) tensor->ne[0], (int) tensor->ne[1], ne[0], ne[1]);
                 return false;
             }
 
+            // for debugging
             if (0) {
-                static const char * ftype_str[] = { "f32", "f16", "q4_0", "q4_1", };
-                printf("%24s - [%5lld, %5lld], type = %6s, %6.2f MB, %9zu bytes\n", name.data(), ne[0], ne[1], ftype_str[ftype], ggml_nbytes(tensor)/1024.0/1024.0, ggml_nbytes(tensor));
+                printf("%24s - [%5d, %5d], type = %6s, %6.2f MB, %9zu bytes\n", name.data(), ne[0], ne[1], ggml_type_name(ggml_type(ttype)), ggml_nbytes(tensor)/1024.0/1024.0, ggml_nbytes(tensor));
             }
 
-            size_t bpe = 0;
-
-            switch (ftype) {
-                case 0: bpe = ggml_type_size(GGML_TYPE_F32);  break;
-                case 1: bpe = ggml_type_size(GGML_TYPE_F16);  break;
-                case 2: bpe = ggml_type_size(GGML_TYPE_Q4_0); assert(ne[0] % 64 == 0); break;
-                case 3: bpe = ggml_type_size(GGML_TYPE_Q4_1); assert(ne[0] % 64 == 0); break;
-                default:
-                        {
-                            fprintf(stderr, "%s: unknown ftype %d in model file\n", __func__, ftype);
-                            return false;
-                        }
-            };
+            const size_t bpe = ggml_type_size(ggml_type(ttype));
 
             if ((nelements*bpe)/ggml_blck_size(tensor->type) != ggml_nbytes(tensor)) {
                 fprintf(stderr, "%s: tensor '%s' has wrong size in model file: got %zu, expected %zu\n",
@@ -450,7 +436,8 @@ bool gpt2_eval(
     };
 
     struct ggml_context * ctx0 = ggml_init(params);
-    struct ggml_cgraph gf = { .n_threads = n_threads };
+    struct ggml_cgraph gf = {};
+    gf.n_threads = n_threads;
 
     struct ggml_tensor * embd = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, N);
     memcpy(embd->data, embd_inp.data(), N*ggml_element_size(embd));
@@ -553,18 +540,18 @@ bool gpt2_eval(
             // KQ_scaled = KQ / sqrt(n_embd/n_head)
             // [n_past + N, N, 12]
             struct ggml_tensor * KQ_scaled =
-                ggml_scale(ctx0,
+                ggml_scale_inplace(ctx0,
                         KQ,
                         ggml_new_f32(ctx0, 1.0f/sqrt(float(n_embd)/n_head))
                         );
 
             // KQ_masked = mask_past(KQ_scaled)
             // [n_past + N, N, 12]
-            struct ggml_tensor * KQ_masked = ggml_diag_mask_inf(ctx0, KQ_scaled, n_past);
+            struct ggml_tensor * KQ_masked = ggml_diag_mask_inf_inplace(ctx0, KQ_scaled, n_past);
 
             // KQ = soft_max(KQ_masked)
             // [n_past + N, N, 12]
-            struct ggml_tensor * KQ_soft_max = ggml_soft_max(ctx0, KQ_masked);
+            struct ggml_tensor * KQ_soft_max = ggml_soft_max_inplace(ctx0, KQ_masked);
 
             // V_trans = Vmem.view(n_embd/n_head, n_head, n_past + N).permute(1, 2, 0, 3).contiguous()
             // [n_past + N, 64, 12]
@@ -691,7 +678,7 @@ bool gpt2_eval(
     inpL = ggml_mul_mat(ctx0, model.lm_head, inpL);
 
     // logits -> probs
-    //inpL = ggml_soft_max(ctx0, inpL);
+    //inpL = ggml_soft_max_inplace(ctx0, inpL);
 
     // run the computation
     ggml_build_forward_expand(&gf, inpL);
@@ -718,6 +705,7 @@ bool gpt2_eval(
 
     return true;
 }
+
 
 int gpt2_predict(void* params_ptr, void* state_pr, char* result) {
     gpt_params params = *(gpt_params*) params_ptr;

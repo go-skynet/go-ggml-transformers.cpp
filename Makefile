@@ -167,26 +167,20 @@ dolly.o: dolly.cpp
 replit.o: replit.cpp
 	$(CXX) $(CXXFLAGS) replit.cpp -o replit.o -c $(LDFLAGS)
 
+mpt.o: mpt.cpp
+	$(CXX) $(CXXFLAGS) mpt.cpp -o mpt.o -c $(LDFLAGS)
+
+gptj.o: gptj.cpp
+	$(CXX) $(CXXFLAGS) gptj.cpp -o gptj.o -c $(LDFLAGS)
+
 gptneox.o: gptneox.cpp
 	$(CXX) $(CXXFLAGS) gptneox.cpp -o gptneox.o -c $(LDFLAGS)
-
-redpajama.o: redpajama.cpp
-	$(CXX) $(CXXFLAGS) redpajama.cpp -o redpajama.o -c $(LDFLAGS)
 
 starcoder.o: starcoder.cpp
 	$(CXX) $(CXXFLAGS) starcoder.cpp -o starcoder.o -c $(LDFLAGS)
 
-stablelm.o: stablelm.cpp
-	$(CXX) $(CXXFLAGS) stablelm.cpp -o stablelm.o -c $(LDFLAGS)
-
-libgpt2.a: stablelm.o redpajama.o starcoder.o gpt2.o replit.o gptneox.o ggml.o dolly.o common-ggml.o common.o
-	ar src libgpt2.a stablelm.o replit.o gptneox.o redpajama.o starcoder.o gpt2.o dolly.o ggml.o common-ggml.o common.o
-
-generic-gpt2.o: gpt2.cpp generic-ggml.o
-	$(CXX) $(CXXFLAGS) gpt2.cpp ggml.o -o gpt2.o -c $(LDFLAGS)
-
-generic-libgpt2.a: stablelm.o gpt2.o generic-ggml.o utils.o
-	ar src libgpt2.a stablelm.o gpt2.o ggml.o utils.o
+libgpt2.a: starcoder.o gptj.o mpt.o gpt2.o replit.o gptneox.o ggml.o dolly.o common-ggml.o common.o
+	ar src libgpt2.a replit.o gptj.o mpt.o gptneox.o starcoder.o gpt2.o dolly.o ggml.o common-ggml.o common.o
 
 example: 
 	@C_INCLUDE_PATH=${INCLUDE_PATH} LIBRARY_PATH=${LIBRARY_PATH} go build -o example -x ./examples
