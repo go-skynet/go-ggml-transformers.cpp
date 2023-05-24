@@ -1,6 +1,6 @@
 INCLUDE_PATH := $(abspath ./)
 LIBRARY_PATH := $(abspath ./)
-CMAKEFLAGS=
+CMAKEFLAGS=${TRANSFORMERS_CMAKEFLAGS}
 
 ifndef UNAME_S
 UNAME_S := $(shell uname -s)
