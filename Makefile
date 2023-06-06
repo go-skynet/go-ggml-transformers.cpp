@@ -126,7 +126,7 @@ endif
 # Print build information
 #
 
-$(info I go-gpt4all-j build info: )
+$(info I libtransformers build info: )
 $(info I UNAME_S:  $(UNAME_S))
 $(info I UNAME_P:  $(UNAME_P))
 $(info I UNAME_M:  $(UNAME_M))
@@ -161,6 +161,9 @@ clean:
 gpt2.o: gpt2.cpp ggml.o
 	$(CXX) $(CXXFLAGS) gpt2.cpp ggml.o -o gpt2.o -c $(LDFLAGS)
 
+falcon.o: falcon.cpp
+	$(CXX) $(CXXFLAGS) falcon.cpp -o falcon.o -c $(LDFLAGS)
+
 dolly.o: dolly.cpp
 	$(CXX) $(CXXFLAGS) dolly.cpp -o dolly.o -c $(LDFLAGS)
 
@@ -179,8 +182,19 @@ gptneox.o: gptneox.cpp
 starcoder.o: starcoder.cpp
 	$(CXX) $(CXXFLAGS) starcoder.cpp -o starcoder.o -c $(LDFLAGS)
 
-libtransformers.a: starcoder.o gptj.o mpt.o gpt2.o replit.o gptneox.o ggml.o dolly.o common-ggml.o common.o
-	ar src libtransformers.a replit.o gptj.o mpt.o gptneox.o starcoder.o gpt2.o dolly.o ggml.o common-ggml.o common.o
+prepare:
+# As we are going to link back to the examples, we need to avoid multiple definitions of main. 
+# This is hack, but it's easier to maintain than duplicating code from the main repository.
+	@find ./ggml.cpp/examples/dolly-v2 -type f -name "*.cpp" -exec sed -i'' -e 's/int main/int main_dolly/g' {} +
+	@find ./ggml.cpp/examples/gpt-2 -type f -name "*.cpp" -exec sed -i'' -e 's/int main/int main_gpt2/g' {} +
+	@find ./ggml.cpp/examples/gpt-j -type f -name "*.cpp" -exec sed -i'' -e 's/int main/int main_gptj/g' {} +
+	@find ./ggml.cpp/examples/gpt-neox -type f -name "*.cpp" -exec sed -i'' -e 's/int main/int main_gptneox/g' {} +
+	@find ./ggml.cpp/examples/mpt -type f -name "*.cpp" -exec sed -i'' -e 's/int main/int main_mpt/g' {} +
+	@find ./ggml.cpp/examples/replit -type f -name "*.cpp" -exec sed -i'' -e 's/int main/int main_replit/g' {} +
+	@find ./ggml.cpp/examples/starcoder -type f -name "*.cpp" -exec sed -i'' -e 's/int main/int main_starcoder/g' {} +
+
+libtransformers.a: prepare starcoder.o falcon.o gptj.o mpt.o gpt2.o replit.o gptneox.o ggml.o dolly.o common-ggml.o common.o
+	ar src libtransformers.a replit.o gptj.o mpt.o gptneox.o starcoder.o gpt2.o dolly.o  falcon.o  ggml.o common-ggml.o common.o
 
 example: 
 	@C_INCLUDE_PATH=${INCLUDE_PATH} LIBRARY_PATH=${LIBRARY_PATH} go build -o example -x ./examples
