@@ -35,8 +35,8 @@ endif
 #
 
 # keep standard at C11 and C++11
-CFLAGS   = -I. -I./ggml.cpp/include/ggml/ -I./ggml.cpp/examples/ -I -O3 -DNDEBUG -std=c11 -fPIC
-CXXFLAGS = -I. -I./ggml.cpp/include/ggml/ -I./ggml.cpp/examples/ -O3 -DNDEBUG -std=c++17 -fPIC
+CFLAGS   = -I. -I./ggml.cpp/include -I./ggml.cpp/include/ggml/ -I./ggml.cpp/examples/ -I -O3 -DNDEBUG -std=c11 -fPIC
+CXXFLAGS = -I. -I./ggml.cpp/include -I./ggml.cpp/include/ggml/ -I./ggml.cpp/examples/ -O3 -DNDEBUG -std=c++17 -fPIC
 LDFLAGS  =
 
 # warnings
