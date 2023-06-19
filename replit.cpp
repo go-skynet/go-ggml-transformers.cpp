@@ -75,15 +75,14 @@ int replit_predict(void* params_ptr, void* state_pr, char* result) {
 
   // determine the required inference memory per token:
   size_t mem_per_token = 0;
-  replit_eval(model, params.n_threads, 0, {0, 1, 2, 3}, logits, mem_per_token);
+  replit_eval(model, params.n_threads, 0, {0, 1, 2, 3}, logits, false, mem_per_token);
 
   for (int i = embd.size(); i < embd_inp.size() + params.n_predict; i++) {
     // predict
     if (embd.size() > 0) {
       const int64_t t_start_us = ggml_time_us();
-
-      if (!replit_eval(model, params.n_threads, n_past, embd, logits,
-                       mem_per_token)) {
+      
+      if (!replit_eval(model, params.n_threads, n_past, embd, logits, false, mem_per_token)) {
         printf("Failed to predict\n");
         return 1;
       }
