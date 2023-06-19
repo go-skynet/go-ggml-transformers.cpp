@@ -59,6 +59,16 @@ int starcoder_predict(void* params_ptr, void* state_pr, char* result) {
     params.n_predict = std::min(params.n_predict, model.hparams.n_ctx - (int) embd_inp.size());
 
 
+    // Handle StarChat "<|end|>" token.
+    gpt_vocab::id starchat_end_token = -1;
+    {
+        const auto it = vocab.token_to_id.find("<|end|>");
+        if (it != vocab.token_to_id.end()) {
+            starchat_end_token = it->second;
+        }
+    }
+
+
     // submit the input prompt token-by-token
     // this reduces the memory usage during inference, at the cost of a bit of speed at the beginning
     std::vector<gpt_vocab::id> embd;
@@ -119,8 +129,16 @@ int starcoder_predict(void* params_ptr, void* state_pr, char* result) {
             res += vocab.id_to_token[id].c_str();
         }
 
-        // end of text token
-        if (embd.back() == 0) { //TODO: this is only for starcoder
+        // check if model is santacoder
+        if (model.hparams.n_layer <= 30 && embd.back() == 49152) {
+            break;
+        }
+        // check if model is starcoder
+        else if (embd.back() == 0) { //TODO: this is only for starcoder
+            break;
+        }
+        // Handle StarChat "<|end|>" token.
+        else if (embd.back() == starchat_end_token) {
             break;
         }
     }
