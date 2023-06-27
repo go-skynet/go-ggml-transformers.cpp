@@ -9,6 +9,7 @@ package gpt2
 import "C"
 import (
 	"fmt"
+	common "github.com/go-skynet/go-common"
 	"strings"
 	"unsafe"
 )
@@ -17,21 +18,34 @@ type Dolly struct {
 	state unsafe.Pointer
 }
 
-func NewDolly(model string) (*Dolly, error) {
-	state := C.dolly_allocate_state()
-	modelPath := C.CString(model)
-	result := C.dolly_bootstrap(modelPath, state)
-	if result != 0 {
-		return nil, fmt.Errorf("failed loading model")
-	}
+var DollyBackendInitializer common.BackendInitializer[Dolly] = common.BackendInitializer[Dolly]{
+	DefaultInitializationOptions: common.InitializationOptions{},
+	Constructor: func(modelPath string, initializationOptions common.InitializationOptions) (*Dolly, error) {
+		state := C.dolly_allocate_state()
+		modelPath := C.CString(model)
+		result := C.dolly_bootstrap(modelPath, state)
+		if result != 0 {
+			return nil, fmt.Errorf("failed loading model")
+		}
 
-	return &Dolly{state: state}, nil
+		return &Dolly{state: state}, nil
+	},
 }
 
-func (l *Dolly) Predict(text string, opts ...PredictOption) (string, error) {
+func (l Dolly) Name() string {
+	return "dolly"
+}
 
-	po := NewPredictOptions(opts...)
+func (l Dolly) Close() error {
+	C.dolly_free_model(l.state)
+	return nil
+}
 
+func (l *Dolly) Predict(text string, opts ...common.PredictTextOptionSetter) (string, error) {
+	return l.PredictWithOptions(text, *MergePredictOptionsWithDefaults(opts...))
+}
+
+func (l *Dolly) PredictWithOptions(text string, po common.PredictTextOptions) (string, error) {
 	input := C.CString(text)
 	if po.Tokens == 0 {
 		po.Tokens = 99999999
@@ -53,8 +67,4 @@ func (l *Dolly) Predict(text string, opts ...PredictOption) (string, error) {
 	C.dolly_free_params(params)
 
 	return res, nil
-}
-
-func (l *Dolly) Free() {
-	C.dolly_free_model(l.state)
 }
