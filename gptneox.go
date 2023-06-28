@@ -9,6 +9,7 @@ package gpt2
 import "C"
 import (
 	"fmt"
+	common "github.com/go-skynet/go-common"
 	"strings"
 	"unsafe"
 )
@@ -17,21 +18,34 @@ type GPTNeoX struct {
 	state unsafe.Pointer
 }
 
-func NewGPTNeoX(model string) (*GPTNeoX, error) {
-	state := C.gpt_neox_allocate_state()
-	modelPath := C.CString(model)
-	result := C.gpt_neox_bootstrap(modelPath, state)
-	if result != 0 {
-		return nil, fmt.Errorf("failed loading model")
-	}
+var GPTNeoXBackendInitializer common.BackendInitializer[GPTNeoX] = common.BackendInitializer[GPTNeoX]{
+	DefaultInitializationOptions: common.InitializationOptions{},
+	Constructor: func(modelPath string, initializationOptions common.InitializationOptions) (*GPTNeoX, error) {
+		state := C.gpt_neox_allocate_state()
+		cModelPath := C.CString(modelPath)
+		result := C.gpt_neox_bootstrap(cModelPath, state)
+		if result != 0 {
+			return nil, fmt.Errorf("failed loading model")
+		}
 
-	return &GPTNeoX{state: state}, nil
+		return &GPTNeoX{state: state}, nil
+	},
 }
 
-func (l *GPTNeoX) Predict(text string, opts ...PredictOption) (string, error) {
+func (l GPTNeoX) Name() string {
+	return "gptneox"
+}
 
-	po := NewPredictOptions(opts...)
+func (l GPTNeoX) Close() error {
+	C.gpt_neox_free_model(l.state)
+	return nil
+}
 
+func (l *GPTNeoX) Predict(text string, opts ...common.PredictTextOptionSetter) (string, error) {
+	return l.PredictWithOptions(text, *MergePredictOptionsWithDefaults(opts...))
+}
+
+func (l *GPTNeoX) PredictWithOptions(text string, po common.PredictTextOptions) (string, error) {
 	input := C.CString(text)
 	if po.Tokens == 0 {
 		po.Tokens = 99999999
@@ -53,8 +67,4 @@ func (l *GPTNeoX) Predict(text string, opts ...PredictOption) (string, error) {
 	C.gpt_neox_free_params(params)
 
 	return res, nil
-}
-
-func (l *GPTNeoX) Free() {
-	C.gpt_neox_free_model(l.state)
 }

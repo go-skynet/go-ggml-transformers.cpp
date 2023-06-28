@@ -9,7 +9,7 @@ import (
 var _ = Describe("gpt2 binding", func() {
 	Context("Declaration", func() {
 		It("fails with no model", func() {
-			model, err := New("not-existing")
+			model, err := GPT2BackendInitializer.Defaults("not-existing")
 			Expect(err).To(HaveOccurred())
 			Expect(model).To(BeNil())
 		})

@@ -9,6 +9,7 @@ package gpt2
 import "C"
 import (
 	"fmt"
+	common "github.com/go-skynet/go-common"
 	"strings"
 	"unsafe"
 )
@@ -17,21 +18,34 @@ type MPT struct {
 	state unsafe.Pointer
 }
 
-func NewMPT(model string) (*MPT, error) {
-	state := C.mpt_allocate_state()
-	modelPath := C.CString(model)
-	result := C.mpt_bootstrap(modelPath, state)
-	if result != 0 {
-		return nil, fmt.Errorf("failed loading model")
-	}
+var MPTBackendInitializer common.BackendInitializer[MPT] = common.BackendInitializer[MPT]{
+	DefaultInitializationOptions: common.InitializationOptions{},
+	Constructor: func(modelPath string, initializationOptions common.InitializationOptions) (*MPT, error) {
+		state := C.mpt_allocate_state()
+		cModelPath := C.CString(modelPath)
+		result := C.mpt_bootstrap(cModelPath, state)
+		if result != 0 {
+			return nil, fmt.Errorf("failed loading model")
+		}
 
-	return &MPT{state: state}, nil
+		return &MPT{state: state}, nil
+	},
 }
 
-func (l *MPT) Predict(text string, opts ...PredictOption) (string, error) {
+func (l MPT) Name() string {
+	return "mpt"
+}
 
-	po := NewPredictOptions(opts...)
+func (l MPT) Close() error {
+	C.mpt_free_model(l.state)
+	return nil
+}
 
+func (l *MPT) Predict(text string, opts ...common.PredictTextOptionSetter) (string, error) {
+	return l.PredictWithOptions(text, *MergePredictOptionsWithDefaults(opts...))
+}
+
+func (l *MPT) PredictWithOptions(text string, po common.PredictTextOptions) (string, error) {
 	input := C.CString(text)
 	if po.Tokens == 0 {
 		po.Tokens = 99999999
@@ -53,8 +67,4 @@ func (l *MPT) Predict(text string, opts ...PredictOption) (string, error) {
 	C.mpt_free_params(params)
 
 	return res, nil
-}
-
-func (l *MPT) Free() {
-	C.mpt_free_model(l.state)
 }

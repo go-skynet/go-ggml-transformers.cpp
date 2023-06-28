@@ -9,6 +9,7 @@ package gpt2
 import "C"
 import (
 	"fmt"
+	common "github.com/go-skynet/go-common"
 	"strings"
 	"unsafe"
 )
@@ -17,21 +18,34 @@ type Starcoder struct {
 	state unsafe.Pointer
 }
 
-func NewStarcoder(model string) (*Starcoder, error) {
-	state := C.starcoder_allocate_state()
-	modelPath := C.CString(model)
-	result := C.starcoder_bootstrap(modelPath, state)
-	if result != 0 {
-		return nil, fmt.Errorf("failed loading model")
-	}
+var StarcoderBackendInitializer common.BackendInitializer[Starcoder] = common.BackendInitializer[Starcoder]{
+	DefaultInitializationOptions: common.InitializationOptions{},
+	Constructor: func(modelPath string, initializationOptions common.InitializationOptions) (*Starcoder, error) {
+		state := C.starcoder_allocate_state()
+		cModelPath := C.CString(modelPath)
+		result := C.starcoder_bootstrap(cModelPath, state)
+		if result != 0 {
+			return nil, fmt.Errorf("failed loading model")
+		}
 
-	return &Starcoder{state: state}, nil
+		return &Starcoder{state: state}, nil
+	},
 }
 
-func (l *Starcoder) Predict(text string, opts ...PredictOption) (string, error) {
+func (l Starcoder) Name() string {
+	return "starcoder"
+}
 
-	po := NewPredictOptions(opts...)
+func (l Starcoder) Close() error {
+	C.starcoder_free_model(l.state)
+	return nil
+}
 
+func (l *Starcoder) Predict(text string, opts ...common.PredictTextOptionSetter) (string, error) {
+	return l.PredictWithOptions(text, *MergePredictOptionsWithDefaults(opts...))
+}
+
+func (l *Starcoder) PredictWithOptions(text string, po common.PredictTextOptions) (string, error) {
 	input := C.CString(text)
 	if po.Tokens == 0 {
 		po.Tokens = 99999999
@@ -53,8 +67,4 @@ func (l *Starcoder) Predict(text string, opts ...PredictOption) (string, error) 
 	C.starcoder_free_params(params)
 
 	return res, nil
-}
-
-func (l *Starcoder) Free() {
-	C.starcoder_free_model(l.state)
 }

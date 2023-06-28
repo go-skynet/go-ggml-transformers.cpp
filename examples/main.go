@@ -8,6 +8,7 @@ import (
 	"os"
 	"strings"
 
+	common "github.com/go-skynet/go-common"
 	gpt2 "github.com/go-skynet/go-ggml-transformers.cpp"
 )
 
@@ -29,7 +30,7 @@ func main() {
 		fmt.Printf("Parsing program arguments failed: %s", err)
 		os.Exit(1)
 	}
-	l, err := gpt2.New(model)
+	l, err := gpt2.GPT2BackendInitializer.Defaults(model)
 	if err != nil {
 		fmt.Println("Loading the model failed:", err.Error())
 		os.Exit(1)
@@ -41,7 +42,7 @@ func main() {
 	for {
 		text := readMultiLineInput(reader)
 
-		res, err := l.Predict(text, gpt2.SetTokens(tokens), gpt2.SetThreads(threads))
+		res, err := l.Predict(text, common.SetTokens(tokens), common.SetThreads(threads))
 		if err != nil {
 			panic(err)
 		}

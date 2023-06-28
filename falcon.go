@@ -9,6 +9,7 @@ package gpt2
 import "C"
 import (
 	"fmt"
+	common "github.com/go-skynet/go-common"
 	"strings"
 	"unsafe"
 )
@@ -17,21 +18,34 @@ type Falcon struct {
 	state unsafe.Pointer
 }
 
-func NewFalcon(model string) (*Falcon, error) {
-	state := C.falcon_allocate_state()
-	modelPath := C.CString(model)
-	result := C.falcon_bootstrap(modelPath, state)
-	if result != 0 {
-		return nil, fmt.Errorf("failed loading model")
-	}
+var FalconBackendInitializer common.BackendInitializer[Falcon] = common.BackendInitializer[Falcon]{
+	DefaultInitializationOptions: common.InitializationOptions{},
+	Constructor: func(modelPath string, initializationOptions common.InitializationOptions) (*Falcon, error) {
+		state := C.falcon_allocate_state()
+		cModelPath := C.CString(modelPath)
+		result := C.falcon_bootstrap(cModelPath, state)
+		if result != 0 {
+			return nil, fmt.Errorf("failed loading model")
+		}
 
-	return &Falcon{state: state}, nil
+		return &Falcon{state: state}, nil
+	},
 }
 
-func (l *Falcon) Predict(text string, opts ...PredictOption) (string, error) {
+func (l Falcon) Name() string {
+	return "falcon"
+}
 
-	po := NewPredictOptions(opts...)
+func (l Falcon) Close() error {
+	C.falcon_free_model(l.state)
+	return nil
+}
 
+func (l *Falcon) Predict(text string, opts ...common.PredictTextOptionSetter) (string, error) {
+	return l.PredictWithOptions(text, *MergePredictOptionsWithDefaults(opts...))
+}
+
+func (l *Falcon) PredictWithOptions(text string, po common.PredictTextOptions) (string, error) {
 	input := C.CString(text)
 	if po.Tokens == 0 {
 		po.Tokens = 99999999
@@ -53,8 +67,4 @@ func (l *Falcon) Predict(text string, opts ...PredictOption) (string, error) {
 	C.falcon_free_params(params)
 
 	return res, nil
-}
-
-func (l *Falcon) Free() {
-	C.falcon_free_model(l.state)
 }

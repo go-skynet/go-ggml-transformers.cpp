@@ -22,8 +22,8 @@ var DollyBackendInitializer common.BackendInitializer[Dolly] = common.BackendIni
 	DefaultInitializationOptions: common.InitializationOptions{},
 	Constructor: func(modelPath string, initializationOptions common.InitializationOptions) (*Dolly, error) {
 		state := C.dolly_allocate_state()
-		modelPath := C.CString(model)
-		result := C.dolly_bootstrap(modelPath, state)
+		cModelPath := C.CString(modelPath)
+		result := C.dolly_bootstrap(cModelPath, state)
 		if result != 0 {
 			return nil, fmt.Errorf("failed loading model")
 		}
