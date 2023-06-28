@@ -9,7 +9,7 @@ import (
 var _ = Describe("gpt2 binding", func() {
 	Context("Declaration", func() {
 		It("fails with no model", func() {
-			model, err := NewFalcon("not-existing")
+			model, err := FalconBackendInitializer.Defaults("not-existing")
 			Expect(err).To(HaveOccurred())
 			Expect(model).To(BeNil())
 		})

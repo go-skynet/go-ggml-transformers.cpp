@@ -9,6 +9,7 @@ package gpt2
 import "C"
 import (
 	"fmt"
+	common "github.com/go-skynet/go-common"
 	"strings"
 	"unsafe"
 )
@@ -17,21 +18,34 @@ type Replit struct {
 	state unsafe.Pointer
 }
 
-func NewReplit(model string) (*Replit, error) {
-	state := C.replit_allocate_state()
-	modelPath := C.CString(model)
-	result := C.replit_bootstrap(modelPath, state)
-	if result != 0 {
-		return nil, fmt.Errorf("failed loading model")
-	}
+var ReplitBackendInitializer common.BackendInitializer[Replit] = common.BackendInitializer[Replit]{
+	DefaultInitializationOptions: common.InitializationOptions{},
+	Constructor: func(modelPath string, initializationOptions common.InitializationOptions) (*Replit, error) {
+		state := C.replit_allocate_state()
+		cModelPath := C.CString(modelPath)
+		result := C.replit_bootstrap(cModelPath, state)
+		if result != 0 {
+			return nil, fmt.Errorf("failed loading model")
+		}
 
-	return &Replit{state: state}, nil
+		return &Replit{state: state}, nil
+	},
 }
 
-func (l *Replit) Predict(text string, opts ...PredictOption) (string, error) {
+func (l Replit) Name() string {
+	return "replit"
+}
 
-	po := NewPredictOptions(opts...)
+func (l Replit) Close() error {
+	C.replit_free_model(l.state)
+	return nil
+}
 
+func (l *Replit) Predict(text string, opts ...common.PredictTextOptionSetter) (string, error) {
+	return l.PredictWithOptions(text, *MergePredictOptionsWithDefaults(opts...))
+}
+
+func (l *Replit) PredictWithOptions(text string, po common.PredictTextOptions) (string, error) {
 	input := C.CString(text)
 	if po.Tokens == 0 {
 		po.Tokens = 99999999
@@ -53,8 +67,4 @@ func (l *Replit) Predict(text string, opts ...PredictOption) (string, error) {
 	C.replit_free_params(params)
 
 	return res, nil
-}
-
-func (l *Replit) Free() {
-	C.replit_free_model(l.state)
 }

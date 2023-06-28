@@ -9,6 +9,7 @@ package gpt2
 import "C"
 import (
 	"fmt"
+	common "github.com/go-skynet/go-common"
 	"strings"
 	"unsafe"
 )
@@ -17,21 +18,34 @@ type GPTJ struct {
 	state unsafe.Pointer
 }
 
-func NewGPTJ(model string) (*GPTJ, error) {
-	state := C.gptj_allocate_state()
-	modelPath := C.CString(model)
-	result := C.gptj_bootstrap(modelPath, state)
-	if result != 0 {
-		return nil, fmt.Errorf("failed loading model")
-	}
+var GPTJBackendInitializer common.BackendInitializer[GPTJ] = common.BackendInitializer[GPTJ]{
+	DefaultInitializationOptions: common.InitializationOptions{},
+	Constructor: func(modelPath string, initializationOptions common.InitializationOptions) (*GPTJ, error) {
+		state := C.gptj_allocate_state()
+		cModelPath := C.CString(modelPath)
+		result := C.gptj_bootstrap(cModelPath, state)
+		if result != 0 {
+			return nil, fmt.Errorf("failed loading model")
+		}
 
-	return &GPTJ{state: state}, nil
+		return &GPTJ{state: state}, nil
+	},
 }
 
-func (l *GPTJ) Predict(text string, opts ...PredictOption) (string, error) {
+func (l GPTJ) Name() string {
+	return "gptj"
+}
 
-	po := NewPredictOptions(opts...)
+func (l GPTJ) Close() error {
+	C.gptj_free_model_state(l.state)
+	return nil
+}
 
+func (l *GPTJ) Predict(text string, opts ...common.PredictTextOptionSetter) (string, error) {
+	return l.PredictWithOptions(text, *MergePredictOptionsWithDefaults(opts...))
+}
+
+func (l *GPTJ) PredictWithOptions(text string, po common.PredictTextOptions) (string, error) {
 	input := C.CString(text)
 	if po.Tokens == 0 {
 		po.Tokens = 99999999
@@ -53,8 +67,4 @@ func (l *GPTJ) Predict(text string, opts ...PredictOption) (string, error) {
 	C.gptj_free_params(params)
 
 	return res, nil
-}
-
-func (l *GPTJ) Free() {
-	C.gptj_free_model_state(l.state)
 }
