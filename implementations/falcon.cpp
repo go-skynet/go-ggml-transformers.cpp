@@ -461,8 +461,8 @@ bool falcon_eval(
                 fused_qkv_row_nb, (n_embd + head_dim) * sizeof(float));
 
             // using mode = 2 for neox mode
-            Qcur = ggml_rope_inplace(ctx0, Qcur, n_past, head_dim, 2);
-            Kcur = ggml_rope_inplace(ctx0, Kcur, n_past, head_dim, 2);
+            Qcur = ggml_rope_inplace(ctx0, Qcur, n_past, head_dim, 2, 0);
+            Kcur = ggml_rope_inplace(ctx0, Kcur, n_past, head_dim, 2, 0 );
 
             // store key and value to memory
             {
