@@ -122,6 +122,11 @@ ifneq ($(filter armv8%,$(UNAME_M)),)
 	CFLAGS += -mfp16-format=ieee -mno-unaligned-access
 endif
 
+ifeq ($(BUILD_TYPE),cublas)
+	EXTRA_LIBS=
+	CMAKE_ARGS+= -DGGML_CUBLAS=ON
+endif
+
 #
 # Print build information
 #
