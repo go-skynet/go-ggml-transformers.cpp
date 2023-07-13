@@ -1,6 +1,6 @@
 INCLUDE_PATH := $(abspath ./)
 LIBRARY_PATH := $(abspath ./)
-CMAKEFLAGS=${TRANSFORMERS_CMAKEFLAGS}
+CMAKE_ARGS=${TRANSFORMERS_CMAKE_ARGS}
 
 ifndef UNAME_S
 UNAME_S := $(shell uname -s)
@@ -124,7 +124,7 @@ endif
 
 ifeq ($(BUILD_TYPE),cublas)
 	EXTRA_LIBS=
-	CMAKE_ARGS+= -DGGML_CUBLAS=ON
+	CMAKE_ARGS += -DGGML_CUBLAS=ON
 endif
 
 #
@@ -138,7 +138,7 @@ $(info I UNAME_M:  $(UNAME_M))
 $(info I CFLAGS:   $(CFLAGS))
 $(info I CXXFLAGS: $(CXXFLAGS))
 $(info I LDFLAGS:  $(LDFLAGS))
-$(info I CMAKEFLAGS:  $(CMAKEFLAGS))
+$(info I CMAKE_ARGS:  $(CMAKE_ARGS))
 $(info I CC:       $(CCV))
 $(info I CXX:      $(CXXV))
 $(info )
@@ -146,7 +146,7 @@ $(info )
 
 ggml.o:
 	mkdir build
-	cd build && cmake ../ggml.cpp $(CMAKEFLAGS) && make VERBOSE=1 ggml && cp -rf src/CMakeFiles/ggml.dir/ggml.c.o ../ggml.o
+	cd build && cmake ../ggml.cpp $(CMAKE_ARGS) && make VERBOSE=1 ggml && cp -rf src/CMakeFiles/ggml.dir/ggml.c.o ../ggml.o
 
 generic-ggml.o:
 	$(CC) $(CFLAGS) -c ggml.cpp/src/ggml.c -o ggml.o
