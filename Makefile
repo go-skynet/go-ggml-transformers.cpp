@@ -1,6 +1,7 @@
 INCLUDE_PATH := $(abspath ./)
 LIBRARY_PATH := $(abspath ./)
 CMAKE_ARGS=${TRANSFORMERS_CMAKE_ARGS}
+EXTRA_OBJS =
 
 ifndef UNAME_S
 UNAME_S := $(shell uname -s)
@@ -123,8 +124,8 @@ ifneq ($(filter armv8%,$(UNAME_M)),)
 endif
 
 ifeq ($(BUILD_TYPE),cublas)
-	EXTRA_LIBS=
 	CMAKE_ARGS += -DGGML_CUBLAS=ON
+	EXTRA_OBJS += ggml-cuda.o
 endif
 
 #
@@ -147,6 +148,9 @@ $(info )
 ggml.o:
 	mkdir build
 	cd build && cmake ../ggml.cpp $(CMAKE_ARGS) && make VERBOSE=1 ggml && cp -rf src/CMakeFiles/ggml.dir/ggml.c.o ../ggml.o
+	@if [ "$(BUILD_TYPE)" = "cublas" ]; then \
+		cp -rf build/src/CMakeFiles/ggml.dir/ggml-cuda.cu.o ggml-cuda.o ;\
+	fi
 
 generic-ggml.o:
 	$(CC) $(CFLAGS) -c ggml.cpp/src/ggml.c -o ggml.o
@@ -199,7 +203,7 @@ prepare:
 	@find ./ggml.cpp/examples/starcoder -type f -name "*.cpp" -exec sed -i'' -e 's/int main/int main_starcoder/g' {} +
 
 libtransformers.a: prepare starcoder.o falcon.o gptj.o mpt.o gpt2.o replit.o gptneox.o ggml.o dolly.o common-ggml.o common.o
-	ar src libtransformers.a replit.o gptj.o mpt.o gptneox.o starcoder.o gpt2.o dolly.o  falcon.o  ggml.o common-ggml.o common.o
+	ar src libtransformers.a replit.o gptj.o mpt.o gptneox.o starcoder.o gpt2.o dolly.o  falcon.o  ggml.o common-ggml.o common.o ${EXTRA_OBJS}
 
 example: 
 	@C_INCLUDE_PATH=${INCLUDE_PATH} LIBRARY_PATH=${LIBRARY_PATH} go build -o example -x ./examples
