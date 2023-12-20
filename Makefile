@@ -146,7 +146,7 @@ $(info )
 
 
 ggml.o:
-	mkdir build
+	mkdir -p build
 	cd build && cmake ../ggml.cpp $(CMAKE_ARGS) && make VERBOSE=1 ggml && cp -rf src/CMakeFiles/ggml.dir/ggml.c.o ../ggml.o
 	@if [ "$(BUILD_TYPE)" = "cublas" ]; then \
 		cp -rf build/src/CMakeFiles/ggml.dir/ggml-cuda.cu.o ggml-cuda.o ;\
